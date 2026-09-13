@@ -13,10 +13,10 @@ import java.util.concurrent.Executor;
 @EnableAsync
 @EnableFeignClients
 @SpringBootApplication
-public class FileImporterApplication {
+public class InvestrackerApplication {
 
 	public static void main(String[] args) {
-		SpringApplication.run(FileImporterApplication.class, args);
+		SpringApplication.run(InvestrackerApplication.class, args);
 	}
 
 	@Bean(name = "asyncExecutor")

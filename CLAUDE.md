@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 InvestTracker is a Spring Boot application built for crypto investors to manage and track their portfolios. It specializes in historical transaction ingestion, precise cost-basis accounting, and tracking realized/unrealized profit/loss across market cycles.
 
-**Naming history:** the project started as a single-purpose "upload a file, parse transactions" tool (hence the original name, `file-importer`) and grew into this. Renamed to `investracker` 2026-09-12 — GitHub repo, local directory, `settings.gradle` (`rootProject.name`), and `spring.application.name` all say `investracker` now. Two things were deliberately **not** renamed, since changing them has real risk/cost for zero user-facing benefit: the Java package (`com.importer.fileimporter`) and the Postgres schema (`file_importer_schema`) — both still carry the old name. Don't be surprised by the mismatch; it's intentional, not leftover debris.
+**Naming history:** the project started as a single-purpose "upload a file, parse transactions" tool (hence the original name, `file-importer`) and grew into this. Renamed to `investracker` 2026-09-12 — GitHub repo, local directory, `settings.gradle` (`rootProject.name`), `spring.application.name`, and the Spring Boot main class (`InvestrackerApplication`, 2026-09-13) all say `investracker` now. Two things remain deliberately **not** renamed, since changing them has real risk/cost for zero user-facing benefit: the Java package (`com.importer.fileimporter`) and the Postgres schema (`file_importer_schema`) — both still carry the old name. Don't be surprised by the mismatch; it's intentional, not leftover debris.
 
 ## Build & Run Commands
 
