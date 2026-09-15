@@ -1,9 +1,11 @@
 package com.importer.fileimporter.service
 
+import com.importer.fileimporter.entity.ExchangeName
 import com.importer.fileimporter.entity.Portfolio
 import com.importer.fileimporter.entity.Transaction
 import com.importer.fileimporter.repository.TransactionRepository
 import com.importer.fileimporter.utils.DateUtils
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.PageImpl
 import org.springframework.data.domain.Pageable
@@ -82,5 +84,42 @@ class TransactionServiceSpec extends Specification {
         result.paidWith == symbolPair
         result.paidAmount == amount
         result.feeAmount == fee
+    }
+
+    def "saveIfAbsent skips a transaction that already exists by external id"() {
+        given:
+        Portfolio portfolio = new Portfolio()
+        Transaction transaction = Transaction.builder()
+                .externalId("ext-1")
+                .exchangeName(ExchangeName.BINANCE)
+                .portfolio(portfolio)
+                .build()
+
+        when:
+        def result = transactionService.saveIfAbsent(transaction)
+
+        then:
+        1 * transactionRepository.findByPortfolioAndExchangeNameAndExternalId(portfolio, ExchangeName.BINANCE, "ext-1") >> Optional.of(transaction)
+        0 * transactionRepository.save(_)
+        !result.isPresent()
+    }
+
+    def "saveIfAbsent treats a concurrent unique-constraint violation as an already-existing row, not a crash"() {
+        given: "two concurrent chunk retries both pass the pre-check before either commits"
+        Portfolio portfolio = new Portfolio()
+        Transaction transaction = Transaction.builder()
+                .externalId("ext-2")
+                .exchangeName(ExchangeName.BINANCE)
+                .portfolio(portfolio)
+                .build()
+
+        when:
+        def result = transactionService.saveIfAbsent(transaction)
+
+        then:
+        1 * transactionRepository.findByPortfolioAndExchangeNameAndExternalId(portfolio, ExchangeName.BINANCE, "ext-2") >> Optional.empty()
+        1 * transactionRepository.save(transaction) >> { throw new DataIntegrityViolationException("uk_portfolio_exchange_extid") }
+        notThrown(DataIntegrityViolationException)
+        !result.isPresent()
     }
 }
