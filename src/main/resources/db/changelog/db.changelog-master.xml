@@ -44,5 +44,7 @@
   <include file="classpath:/db/changelog/changes/2026-05-01-042-add-external-id-to-transactions.sql"/>
   <include file="classpath:/db/changelog/changes/2026-05-01-043-add-raw-response-table.sql"/>
   <include file="classpath:/db/changelog/changes/2026-09-15-044-add-sync-job-tracking.sql"/>
+  <include file="classpath:/db/changelog/changes/2026-09-16-045-rename-stable-total-cost-to-inventory-cost-usdt.sql"/>
+  <include file="classpath:/db/changelog/changes/2026-09-16-046-backfill-exchange-name-on-transactions.sql"/>
 
 </databaseChangeLog>
