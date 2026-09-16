@@ -1,69 +1,89 @@
 # InvestTracker
-InvestTracker is a specialized Spring Boot application designed for crypto investors to track their portfolio's performance, cost basis, and realized/unrealized gains. (Renamed from `file-importer` 2026-09-12 — it started as a single-purpose "upload a file, parse transactions" tool and grew into this.)
 
-It was born from the need to accurately account for historical transactions, especially through volatile market cycles (like the 2021 bull run and subsequent dips), providing a clear view of how a portfolio appreciates or depreciates over time.
+Cryptocurrency portfolio tracker and accounting engine calculating cost basis (AVCO), realized/unrealized P&L, and multi-exchange historical sync.
 
-## Core Features
+## Prerequisites
 
-- **Historical Ingestion**: Support for importing large volumes of transaction data from exchanges (Binance, MEXC) via CSV/Excel.
-- **Multi-Exchange Sync**: Automatically sync your trading history directly from Binance, MEXC, and IOL. [See Exchange Integrations Guide](docs/exchange-integrations.md).
-- **Accurate Accounting**: Precise cost basis tracking (Average Cost) and Realized Profit/Loss calculation.
-- **Portfolio Valuation**: Real-time (cached) market value tracking in USDT.
-- **DIP Analytics**: Track your "buying the dip" efficiency by monitoring your average entry prices.
-
-## Useful resources
-
-To get prices in real time we use CryptoCompare. You will need an API key:
-
-        https://www.cryptocompare.com/cryptopian/api-keys
+| Component | Requirement |
+|---|---|
+| Java | JDK 11+ (runtime compatible with JDK 17/21; `sourceCompatibility = 11`) |
+| Build Tool | Gradle Wrapper (`./gradlew`) |
+| Database | PostgreSQL 13+ with schema `file_importer_schema` (default port `5435`) |
+| Cache | Redis 7+ (default port `6379`) |
+| Containers | Docker & Docker Compose |
 
 ## Getting Started
 
-### Authentication
-InvestTracker requires authentication for most endpoints. See the [Authentication Guide](docs/authentication.md) for instructions on how to register and login.
+```bash
+# 1. Start backing services (PostgreSQL & Redis)
+docker compose -f docker/docker-compose.yml up -d
 
-### More documentation
-- [Architecture & Engineering Standard](docs/architecture.md) — layers, coding standards, request flows, core API reference
-- [Accounting Scenarios](docs/accounting-scenarios.md) — the BDD spec for cost basis / P&L / capital tracking
-- [Exchange Integrations](docs/exchange-integrations.md) — Binance, MexC, IOL setup and sync
-- [Testing & Coverage](docs/testing.md)
-- [Roadmap](docs/roadmap.md)
-- [Deploy Guide](docs/deploy-guide.md)
+# 2. Build application
+./gradlew build
 
-## API Documentation
+# 3. Run unit tests
+./gradlew test
 
-The API is documented using OpenAPI 3.0 (Swagger). After starting the application, you can access the documentation at:
+# 4. Run integration tests (requires Docker for Testcontainers)
+./gradlew integrationTest
 
-        http://localhost:9080/swagger-ui.html
+# 5. Start application (runs on http://localhost:9080)
+./gradlew bootRun
+```
 
-This provides an interactive interface to explore and test all available endpoints.
+Interactive API documentation: [Swagger UI](http://localhost:9080/swagger-ui.html) | [OpenAPI JSON](http://localhost:9080/api-docs).
 
-For information on how to document new APIs, see the [API Documentation Guide](docs/api-documentation-guide.md).
+## Configuration
 
-## Running tests
+### Profiles & Contexts
 
-### Unit tests
+- **Spring Profiles**: `default` (`application.yml`), `dev` (`appli-dev.yml` with debug SQL logging).
+- **Liquibase Contexts**: `development`, `production`.
 
-To run unit tests:
+### Environment Variables
 
-        ./gradlew test
+| Variable | Default (Local Dev) | Description |
+|---|---|---|
+| `SERVER_PORT` | `9080` | HTTP application port |
+| `DB_URL` | `jdbc:postgresql://localhost:5435/importer_database?currentSchema=file_importer_schema,public` | PostgreSQL JDBC connection URL |
+| `DB_USERNAME` | `root` | Database username |
+| `DB_PASSWORD` | `password` | Database password |
+| `SPRING_DATA_REDIS_HOST` | `localhost` | Redis server host |
+| `SPRING_DATA_REDIS_PORT` | `6379` | Redis server port |
+| `CRYPTOCOMPARE_API_KEY` | *(Configured in `application.yml`)* | CryptoCompare API key for pricing |
+| `JWT_SECRET` | *(Configured in `application.yml`)* | HMAC-SHA256 secret key for JWT authentication |
+| `JWT_EXPIRATION` | `86400000` (24h) | JWT expiration time in milliseconds |
 
-### Integration tests
+## Architecture Context
 
-To run integration tests:
+Built on Spring Boot 2.7.15:
+- **Security**: Spring Security with stateless JWT filter chain (`JwtAuthenticationFilter`).
+- **Persistence**: Spring Data JPA with Hibernate Spatial (PostGIS dialect) and automated Liquibase schema migrations.
+- **Caching**: Spring Data Redis backing immutable historical price lookups (`HistoricalPriceCacheService`).
+- **External Integration**: Spring Cloud OpenFeign (IOL client) and Spring WebFlux `WebClient` (Binance & MexC HMAC-SHA256 APIs).
+- **Testing**: Spock Framework 2.0 (Groovy 3.0) and Testcontainers for PostgreSQL integration specs.
 
-        ./gradlew integrationTest
+```mermaid
+graph LR
+    Client --> Security[Spring Security / JWT]
+    Security --> Controller[REST Controllers]
+    Controller --> Facade[Facades]
+    Facade --> Service[Domain Services]
+    Service --> JPA[Spring Data JPA / Liquibase]
+    Service --> Redis[Spring Data Redis Cache]
+    Service --> External[OpenFeign / WebClient]
+    JPA --> Postgres[(PostgreSQL 13)]
+    Redis --> RedisDB[(Redis 7)]
+    External --> APIs[Binance / MexC / IOL / CryptoCompare]
+```
 
-### Test coverage
+## Documentation Index
 
-JaCoCo is configured to generate test coverage reports. After running tests, you can find the reports at:
-
-- Unit tests coverage: `build/reports/jacoco/test/html/index.html`
-- Integration tests coverage: `build/reports/jacoco/integrationTest/index.html`
-- Combined coverage: `build/reports/jacoco/allTests/index.html`
-
-To generate all test coverage reports:
-
-        ./gradlew jacocoAllTestReport
-
-For more information on test coverage and how to improve it, see the [Testing & Coverage Guide](docs/testing.md).
+- [Architecture & Standards](docs/architecture.md) — Layered architecture, conventions, and request flows.
+- [Exchange Integrations](docs/exchange-integrations.md) — Binance, MexC, and IOL sync guides and endpoints.
+- [Accounting Scenarios](docs/accounting-scenarios.md) — Financial specification for AVCO, fees, and P&L.
+- [Authentication Guide](docs/authentication.md) — JWT auth endpoints and test credentials.
+- [Testing & Coverage](docs/testing.md) — Spock test commands, JaCoCo targets, and coverage gaps.
+- [Deployment Guide](docs/deploy-guide.md) — Docker containerization and production configuration.
+- [API Documentation Guide](docs/api-documentation-guide.md) — SpringDoc OpenAPI annotation standards.
+- [Development Roadmap](docs/roadmap.md) — Active technical debt and upcoming milestones.
