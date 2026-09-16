@@ -67,7 +67,7 @@ public class BinanceFullSyncService {
 
         String apiKey = config.getApiKey();
         String secretKey = encryptionService.decrypt(config.getApiSecret());
-        Portfolio portfolio = portfolioService.findOrSave(portfolioName, ExchangeName.BINANCE);
+        Portfolio portfolio = portfolioService.resolveExchangePortfolio(portfolioName, ExchangeName.BINANCE);
 
         long startTime = startDateEpochMs != null ? startDateEpochMs : START_TIME_2017;
         long endTime = endDateEpochMs != null ? endDateEpochMs : System.currentTimeMillis();

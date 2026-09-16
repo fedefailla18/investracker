@@ -75,9 +75,11 @@ All exchange credentials are AES-encrypted at rest (`EncryptionService`) and man
 |---|---|---|---|
 | `POST /transaction/sync/binance` | `BinanceSyncService` | Sync | Incremental spot trades for currently-held assets |
 | `POST /transaction/sync/mexc` | `MexcSyncService` | Sync | Incremental MexC spot trades since `lastSyncTimestamp` |
-| `POST /transaction/sync/binance/full` | `BinanceFullSyncService` | Async (202) | Full history (trades, deposits, withdrawals, fiat, convert). Updates sent via WebSocket `/user/queue/sync-status` |
-| `POST /transaction/sync/mexc/full` | `MexcFullSyncService` | Async (202) | Full history (trades, deposits, withdrawals) |
+| `POST /transaction/sync/binance/full` | `BinanceFullSyncService` | Async (202) | Job-tracked full history (one `SyncJob` per data type — trades/deposits/withdrawals/fiat/convert), resumable and independently retryable. See [binance-sync-jobs.md](docs/binance-sync-jobs.md) |
+| `POST /transaction/sync/mexc/full` | `MexcFullSyncService` | Async (202) | Full history (trades, deposits, withdrawals) — still the older fire-and-forget design |
 | `GET /api/integration/iol/**` | `IolIntegrationService` | Live | On-demand proxy via `IolClient` (OpenFeign) with 14-min cached OAuth2 token |
+
+**Portfolio vs Exchanges (2026-09-16)**: every sync above resolves its target portfolio through `PortfolioService.resolveExchangePortfolio(...)`, not `findOrSave` — it auto-creates the exchange's dedicated portfolio (`Portfolio.exchangeName` set) but throws `PortfolioNotExchangeOwnedException` (→ 400) if asked to sync into a manually-managed portfolio or a different exchange's. Synced and manually-entered transactions are meant to stay in separate, comparable portfolios; `POST /portfolio/consolidate` is the explicit action that merges an exchange portfolio's transactions into a manual one. Full rationale in [architecture.md](docs/architecture.md#portfolio-vs-exchanges-two-comparable-views-not-one-merged-pile).
 
 ## Testing Protocol
 

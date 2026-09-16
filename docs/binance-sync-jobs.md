@@ -150,3 +150,13 @@ requirement.
   design.
 - Fully deleting a job's chunks (e.g. to force a from-scratch resync) isn't exposed via API yet —
   only chunk-level retry of FAILED chunks. A "hard reset" endpoint could be added if needed.
+
+## Update (2026-09-16): portfolio targeting is now guarded
+
+`createSyncJobs` originally resolved its target portfolio via the plain `PortfolioService.findOrSave`,
+which would happily retarget *any* portfolio name the caller passed — including the user's own
+manually-managed portfolio. That's since been hardened: it now goes through
+`PortfolioService.resolveExchangePortfolio`, which refuses (400) to sync into anything but
+Binance's own dedicated portfolio. See "Portfolio vs Exchanges" in
+[architecture.md](architecture.md) for the full rationale — this was a real gap in the original
+design here, not a hypothetical.

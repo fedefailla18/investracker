@@ -17,6 +17,7 @@ import com.importer.fileimporter.service.BinanceAsyncSyncService;
 import com.importer.fileimporter.service.BinanceSyncService;
 import com.importer.fileimporter.service.MexcAsyncSyncService;
 import com.importer.fileimporter.service.MexcSyncService;
+import com.importer.fileimporter.service.PortfolioNotExchangeOwnedException;
 import com.importer.fileimporter.service.PortfolioService;
 import com.importer.fileimporter.service.ProcessFileFactory;
 import com.importer.fileimporter.service.SyncJobAlreadyRunningException;
@@ -214,22 +215,36 @@ public class TransactionController {
         return transactionFacade.save(request);
     }
 
-    @Operation(summary = "Sync transactions from Binance", description = "Automatically fetch and sync transactions from Binance API")
+    @Operation(summary = "Sync transactions from Binance",
+            description = "Automatically fetch and sync transactions from Binance API. " +
+                    "`portfolio` must be the dedicated Binance exchange portfolio (defaults to 'BINANCE' if omitted) — " +
+                    "400 if it names a manually-managed portfolio or another exchange's portfolio.")
     @PostMapping("/sync/binance")
     public ResponseEntity<?> syncBinance(
             @AuthenticationPrincipal User user,
             @Parameter(description = "Portfolio name", required = true) @RequestParam String portfolio) {
-        binanceSyncService.sync(user, portfolio);
-        return ResponseEntity.ok("Sync initiated successfully");
+        try {
+            binanceSyncService.sync(user, portfolio);
+            return ResponseEntity.ok("Sync initiated successfully");
+        } catch (PortfolioNotExchangeOwnedException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
     }
 
-    @Operation(summary = "Sync transactions from MexC", description = "Automatically fetch and sync transactions from MexC API")
+    @Operation(summary = "Sync transactions from MexC",
+            description = "Automatically fetch and sync transactions from MexC API. " +
+                    "`portfolio` must be the dedicated MexC exchange portfolio (defaults to 'MEXC' if omitted) — " +
+                    "400 if it names a manually-managed portfolio or another exchange's portfolio.")
     @PostMapping("/sync/mexc")
     public ResponseEntity<?> syncMexc(
             @AuthenticationPrincipal User user,
             @Parameter(description = "Portfolio name", required = true) @RequestParam String portfolio) {
-        mexcSyncService.sync(user, portfolio);
-        return ResponseEntity.ok("Sync initiated successfully");
+        try {
+            mexcSyncService.sync(user, portfolio);
+            return ResponseEntity.ok("Sync initiated successfully");
+        } catch (PortfolioNotExchangeOwnedException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
     }
 
     @Operation(summary = "Full historical sync from Binance (async, job-tracked)",
@@ -257,6 +272,8 @@ public class TransactionController {
             return ResponseEntity.accepted().body(response);
         } catch (SyncJobAlreadyRunningException e) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(e.getMessage());
+        } catch (PortfolioNotExchangeOwnedException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
         }
     }
 
