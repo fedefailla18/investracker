@@ -62,7 +62,7 @@ public class BinanceSyncService {
         String apiKey = config.getApiKey();
         String secretKey = encryptionService.decrypt(config.getApiSecret());
 
-        Portfolio portfolio = portfolioService.findOrSave(portfolioName, ExchangeName.BINANCE);
+        Portfolio portfolio = portfolioService.resolveExchangePortfolio(portfolioName, ExchangeName.BINANCE);
 
         long binanceServerTime = binanceApiService.getServerTime();
         long clockOffset = binanceServerTime - System.currentTimeMillis();
@@ -219,6 +219,8 @@ public class BinanceSyncService {
                 .paidWith(data.getPaidWith())
                 .paidAmount(data.getAmount())
                 .feeAmount(data.getFee())
+                .externalId(data.getTradeId() != null ? data.getTradeId().toString() : null)
+                .exchangeName(ExchangeName.BINANCE)
                 .created(LocalDateTime.now())
                 .createdBy("BinanceSyncService")
                 .portfolio(portfolio)

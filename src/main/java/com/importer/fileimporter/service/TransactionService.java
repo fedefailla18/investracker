@@ -103,12 +103,22 @@ public class TransactionService {
             java.util.Optional<Transaction> existing = transactionRepository.findByPortfolioAndExchangeNameAndExternalId(
                     transaction.getPortfolio(), transaction.getExchangeName(), transaction.getExternalId());
             if (existing.isPresent()) {
-                log.debug("Skipping duplicate transaction: {} {} (External ID: {})", 
+                log.debug("Skipping duplicate transaction: {} {} (External ID: {})",
                         transaction.getExchangeName(), transaction.getSymbol(), transaction.getExternalId());
                 return java.util.Optional.empty();
             }
         }
-        return java.util.Optional.of(transactionRepository.save(transaction));
+        try {
+            return java.util.Optional.of(transactionRepository.save(transaction));
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            // The check above isn't race-safe against concurrent/overlapping sync retries of the
+            // same window — the DB's uk_portfolio_exchange_extid constraint is the real guarantee.
+            // Treat a constraint violation here the same as an already-existing row: a clean skip,
+            // not a 500 surfaced to the caller.
+            log.debug("Concurrent duplicate insert caught for {} {} (External ID: {}): {}",
+                    transaction.getExchangeName(), transaction.getSymbol(), transaction.getExternalId(), e.getMessage());
+            return java.util.Optional.empty();
+        }
     }
 
     public void flush() {

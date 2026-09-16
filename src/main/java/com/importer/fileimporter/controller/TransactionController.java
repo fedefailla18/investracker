@@ -3,18 +3,24 @@ package com.importer.fileimporter.controller;
 import com.importer.fileimporter.dto.CoinInformationResponse;
 import com.importer.fileimporter.dto.FileInformationResponse;
 import com.importer.fileimporter.dto.PortfolioProcessingResult;
+import com.importer.fileimporter.dto.SyncJobDetailResponse;
+import com.importer.fileimporter.dto.SyncJobResponse;
 import com.importer.fileimporter.dto.TransactionDto;
 import com.importer.fileimporter.dto.TransactionHoldingDto;
+import com.importer.fileimporter.entity.ExchangeName;
+import com.importer.fileimporter.entity.SyncJob;
+import com.importer.fileimporter.entity.SyncJobStatus;
 import com.importer.fileimporter.entity.Transaction;
 import com.importer.fileimporter.entity.User;
 import com.importer.fileimporter.facade.CoinInformationFacade;
 import com.importer.fileimporter.service.BinanceAsyncSyncService;
-import com.importer.fileimporter.service.BinanceFullSyncService;
 import com.importer.fileimporter.service.BinanceSyncService;
 import com.importer.fileimporter.service.MexcAsyncSyncService;
 import com.importer.fileimporter.service.MexcSyncService;
+import com.importer.fileimporter.service.PortfolioNotExchangeOwnedException;
 import com.importer.fileimporter.service.PortfolioService;
 import com.importer.fileimporter.service.ProcessFileFactory;
+import com.importer.fileimporter.service.SyncJobAlreadyRunningException;
 import com.importer.fileimporter.service.TransactionFacade;
 import com.importer.fileimporter.service.TransactionService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -50,6 +56,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @RequiredArgsConstructor
 @RestController
@@ -64,10 +71,11 @@ public class TransactionController {
     private final CoinInformationFacade coinInformationFacade;
     private final BinanceSyncService binanceSyncService;
     private final MexcSyncService mexcSyncService;
-    private final BinanceFullSyncService binanceFullSyncService;
     private final BinanceAsyncSyncService binanceAsyncSyncService;
     private final MexcAsyncSyncService mexcAsyncSyncService;
     private final PortfolioService portfolioService;
+    private final com.importer.fileimporter.repository.SyncJobRepository syncJobRepository;
+    private final com.importer.fileimporter.repository.SyncJobChunkRepository syncJobChunkRepository;
 
     @Operation(summary = "Filter transactions", description = "Filter transactions by various criteria with pagination")
     @ApiResponses(value = {
@@ -207,36 +215,100 @@ public class TransactionController {
         return transactionFacade.save(request);
     }
 
-    @Operation(summary = "Sync transactions from Binance", description = "Automatically fetch and sync transactions from Binance API")
+    @Operation(summary = "Sync transactions from Binance",
+            description = "Automatically fetch and sync transactions from Binance API. " +
+                    "`portfolio` must be the dedicated Binance exchange portfolio (defaults to 'BINANCE' if omitted) — " +
+                    "400 if it names a manually-managed portfolio or another exchange's portfolio.")
     @PostMapping("/sync/binance")
     public ResponseEntity<?> syncBinance(
             @AuthenticationPrincipal User user,
             @Parameter(description = "Portfolio name", required = true) @RequestParam String portfolio) {
-        binanceSyncService.sync(user, portfolio);
-        return ResponseEntity.ok("Sync initiated successfully");
+        try {
+            binanceSyncService.sync(user, portfolio);
+            return ResponseEntity.ok("Sync initiated successfully");
+        } catch (PortfolioNotExchangeOwnedException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
     }
 
-    @Operation(summary = "Sync transactions from MexC", description = "Automatically fetch and sync transactions from MexC API")
+    @Operation(summary = "Sync transactions from MexC",
+            description = "Automatically fetch and sync transactions from MexC API. " +
+                    "`portfolio` must be the dedicated MexC exchange portfolio (defaults to 'MEXC' if omitted) — " +
+                    "400 if it names a manually-managed portfolio or another exchange's portfolio.")
     @PostMapping("/sync/mexc")
     public ResponseEntity<?> syncMexc(
             @AuthenticationPrincipal User user,
             @Parameter(description = "Portfolio name", required = true) @RequestParam String portfolio) {
-        mexcSyncService.sync(user, portfolio);
-        return ResponseEntity.ok("Sync initiated successfully");
+        try {
+            mexcSyncService.sync(user, portfolio);
+            return ResponseEntity.ok("Sync initiated successfully");
+        } catch (PortfolioNotExchangeOwnedException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
     }
 
-    @Operation(summary = "Full historical sync from Binance (async)",
-            description = "Enqueues a background full-history sync of all trades, deposits, withdrawals and fiat orders. " +
-                    "Returns 202 immediately; a WebSocket message is sent to /user/queue/sync-status on completion. " +
+    @Operation(summary = "Full historical sync from Binance (async, job-tracked)",
+            description = "Creates one resumable sync job per data type (trades, deposits, withdrawals, fiat orders, " +
+                    "convert trades) and runs each in the background. Returns 202 with the created jobs immediately; " +
+                    "poll GET /transaction/sync/binance/jobs or subscribe to /user/queue/sync-status for progress. " +
+                    "409 if a job of the same type is already running for this exchange config. " +
                     "startDate and endDate are epoch milliseconds (optional — defaults to 2017-01-01 to now).")
+    @ApiResponses(value = {
+        @ApiResponse(responseCode = "202", description = "Jobs created and running",
+                content = @Content(mediaType = "application/json", schema = @Schema(implementation = SyncJobResponse.class))),
+        @ApiResponse(responseCode = "409", description = "A job of one of these types is already in progress", content = @Content)
+    })
     @PostMapping("/sync/binance/full")
     public ResponseEntity<?> syncBinanceFull(
             @AuthenticationPrincipal User user,
             @Parameter(description = "Portfolio name", required = true) @RequestParam String portfolio,
             @Parameter(description = "Sync start date as epoch millis (optional, defaults to 2017-01-01)") @RequestParam(required = false) Long startDate,
             @Parameter(description = "Sync end date as epoch millis (optional, defaults to now)") @RequestParam(required = false) Long endDate) {
-        binanceAsyncSyncService.syncFullHistoryAsync(user, portfolio, startDate, endDate);
-        return ResponseEntity.accepted().body("Full historical sync started. You will be notified upon completion.");
+        try {
+            List<SyncJob> jobs = binanceAsyncSyncService.triggerFullSyncJobs(user, portfolio, startDate, endDate);
+            List<SyncJobResponse> response = jobs.stream()
+                    .map(job -> SyncJobResponse.of(job, syncJobChunkRepository.findBySyncJobOrderByChunkKey(job)))
+                    .collect(java.util.stream.Collectors.toList());
+            return ResponseEntity.accepted().body(response);
+        } catch (SyncJobAlreadyRunningException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(e.getMessage());
+        } catch (PortfolioNotExchangeOwnedException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
+    }
+
+    @Operation(summary = "List Binance sync jobs", description = "Most recent full-sync jobs for this user's Binance config, newest first.")
+    @GetMapping("/sync/binance/jobs")
+    public ResponseEntity<List<SyncJobResponse>> listBinanceSyncJobs(@AuthenticationPrincipal User user) {
+        List<SyncJobResponse> response = syncJobRepository.findByUserAndExchangeNameOrderByCreatedAtDesc(user, ExchangeName.BINANCE).stream()
+                .map(job -> SyncJobResponse.of(job, syncJobChunkRepository.findBySyncJobOrderByChunkKey(job)))
+                .collect(java.util.stream.Collectors.toList());
+        return ResponseEntity.ok(response);
+    }
+
+    @Operation(summary = "Get Binance sync job detail", description = "Job status plus every chunk (symbol or date window) and its state — use to see exactly which date range failed.")
+    @GetMapping("/sync/binance/jobs/{jobId}")
+    public ResponseEntity<?> getBinanceSyncJob(@AuthenticationPrincipal User user, @PathVariable UUID jobId) {
+        return syncJobRepository.findById(jobId)
+                .filter(job -> job.getUser().getId().equals(user.getId()))
+                .map(job -> ResponseEntity.ok(SyncJobDetailResponse.of(job, syncJobChunkRepository.findBySyncJobOrderByChunkKey(job))))
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    @Operation(summary = "Retry a failed Binance sync job",
+            description = "Only chunks (symbols/date windows) that failed are re-run — chunks already COMPLETED are left untouched. 400 if the job isn't currently FAILED.")
+    @PostMapping("/sync/binance/jobs/{jobId}/retry")
+    public ResponseEntity<?> retryBinanceSyncJob(@AuthenticationPrincipal User user, @PathVariable UUID jobId) {
+        return syncJobRepository.findById(jobId)
+                .filter(job -> job.getUser().getId().equals(user.getId()))
+                .map(job -> {
+                    if (job.getStatus() != SyncJobStatus.FAILED) {
+                        return ResponseEntity.badRequest().body("Only a FAILED job can be retried (current status: " + job.getStatus() + ")");
+                    }
+                    binanceAsyncSyncService.retryJobAsync(jobId, user.getUsername());
+                    return ResponseEntity.accepted().body("Retry started for job " + jobId);
+                })
+                .orElse(ResponseEntity.notFound().build());
     }
 
     @Operation(summary = "Full historical sync from MexC (async)",
