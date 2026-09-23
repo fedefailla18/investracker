@@ -206,4 +206,49 @@ class BinanceFullSyncServiceSpec extends Specification {
         then:
         thrown(IllegalStateException)
     }
+
+    // ── reconcileOrphanedJobs ────────────────────────────────────────────────────
+
+    def "reconcileOrphanedJobs marks a leftover PENDING/RUNNING job FAILED and resets its RUNNING chunks to PENDING"() {
+        given: "a job never started (PENDING, no chunks touched) and one that was mid-flight (RUNNING)"
+        SyncJob pendingJob = SyncJob.builder().id(UUID.randomUUID()).entityType(SyncEntityType.DEPOSITS)
+                .status(SyncJobStatus.PENDING).build()
+        SyncJob runningJob = SyncJob.builder().id(UUID.randomUUID()).entityType(SyncEntityType.TRADES)
+                .status(SyncJobStatus.RUNNING).build()
+
+        SyncJobChunk stillPending = SyncJobChunk.builder().id(UUID.randomUUID()).syncJob(pendingJob)
+                .chunkKey("0-500").status(SyncChunkStatus.PENDING).build()
+        SyncJobChunk completed = SyncJobChunk.builder().id(UUID.randomUUID()).syncJob(runningJob)
+                .chunkKey("BTCUSDT").status(SyncChunkStatus.COMPLETED).recordsProcessed(40).build()
+        SyncJobChunk stuckRunning = SyncJobChunk.builder().id(UUID.randomUUID()).syncJob(runningJob)
+                .chunkKey("ETHUSDT").status(SyncChunkStatus.RUNNING).cursorValue(12345L).build()
+
+        syncJobRepository.findByStatusIn(_) >> [pendingJob, runningJob]
+        syncJobChunkRepository.findBySyncJobOrderByChunkKey(pendingJob) >> [stillPending]
+        syncJobChunkRepository.findBySyncJobOrderByChunkKey(runningJob) >> [completed, stuckRunning]
+
+        when:
+        service.reconcileOrphanedJobs()
+
+        then:
+        pendingJob.status == SyncJobStatus.FAILED
+        runningJob.status == SyncJobStatus.FAILED
+        pendingJob.errorMessage.contains("restart")
+        stillPending.status == SyncChunkStatus.PENDING // untouched, was already PENDING
+        completed.status == SyncChunkStatus.COMPLETED // untouched — this is the whole point
+        stuckRunning.status == SyncChunkStatus.PENDING // reset so retry redoes only this one
+        stuckRunning.cursorValue == 12345L // checkpoint preserved — resumes mid-symbol, not from scratch
+    }
+
+    def "reconcileOrphanedJobs does nothing when there are no leftover jobs"() {
+        given:
+        syncJobRepository.findByStatusIn(_) >> []
+
+        when:
+        service.reconcileOrphanedJobs()
+
+        then:
+        0 * syncJobRepository.save(_)
+        0 * syncJobChunkRepository.save(_)
+    }
 }

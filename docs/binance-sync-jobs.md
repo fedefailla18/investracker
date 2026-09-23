@@ -160,3 +160,23 @@ manually-managed portfolio. That's since been hardened: it now goes through
 Binance's own dedicated portfolio. See "Portfolio vs Exchanges" in
 [architecture.md](architecture.md) for the full rationale — this was a real gap in the original
 design here, not a hypothetical.
+
+## Update (2026-09-23): orphaned jobs from a killed process now self-heal on restart
+
+Hit in practice, not hypothetically: a full sync was triggered, the backend was restarted a few
+seconds later (to pick up an unrelated migration), and every job from that batch was left sitting
+in `PENDING`/`RUNNING` forever — one had actually started (`TRADES`), the other four never got a
+thread from `syncTaskExecutor` before the process died. Nothing reconciled that state, and the
+retry endpoint only accepts `FAILED` jobs, so these were stuck: not running, not retriable, no
+worker coming back for them.
+
+Fixed with `BinanceFullSyncService.reconcileOrphanedJobs()`, run once via
+`SyncJobStartupReconciler` on `ApplicationReadyEvent`. Since this runs right after the app comes
+up, any `sync_job` found `PENDING`/`RUNNING` at that moment cannot belong to *this* process — it
+can only be left over from one that died. It marks those jobs `FAILED` (with a clear error
+message) and resets any of their chunks still `RUNNING` back to `PENDING` — chunks already
+`COMPLETED` (and their checkpointed `cursor_value` for `TRADES`) are untouched, so a subsequent
+retry resumes rather than restarts. Deliberately does **not** auto-retry — a dev restart shouldn't
+silently kick off a multi-hour Binance sync; the user (or the FE's `SyncJobsPanel`, which already
+shows a retry button on `FAILED` jobs) decides when. MexC's full sync isn't covered — it's still
+the older fire-and-forget design, not job-tracked.

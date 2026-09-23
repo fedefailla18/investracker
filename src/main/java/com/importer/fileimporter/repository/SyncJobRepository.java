@@ -22,4 +22,7 @@ public interface SyncJobRepository extends JpaRepository<SyncJob, UUID> {
 
     Optional<SyncJob> findByUserAndExchangeNameAndEntityTypeAndStatusIn(
             User user, ExchangeName exchangeName, SyncEntityType entityType, Collection<SyncJobStatus> statuses);
+
+    /** Used at startup to find jobs orphaned by a previous process dying mid-run — see SyncJobStartupReconciler. */
+    List<SyncJob> findByStatusIn(Collection<SyncJobStatus> statuses);
 }

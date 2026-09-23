@@ -185,6 +185,40 @@ public class BinanceFullSyncService {
         maybeAdvanceLastSyncTimestamp(job);
     }
 
+    /**
+     * Finds jobs left PENDING/RUNNING by a previous process instance (this JVM just started, so
+     * any such row can only be orphaned — nothing here could have created them) and marks them
+     * FAILED so the existing retry path can pick them back up. Any chunk still RUNNING is reset
+     * to PENDING; chunks already COMPLETED are left untouched, so retrying only redoes the work
+     * that didn't finish. Does not retry automatically — a restart during development shouldn't
+     * silently kick off a fresh multi-hour sync against Binance.
+     */
+    public void reconcileOrphanedJobs() {
+        List<SyncJob> orphaned = syncJobRepository.findByStatusIn(ACTIVE_STATUSES);
+        for (SyncJob job : orphaned) {
+            SyncJobStatus previousStatus = job.getStatus();
+            List<SyncJobChunk> chunks = syncJobChunkRepository.findBySyncJobOrderByChunkKey(job);
+            int resetChunks = 0;
+            for (SyncJobChunk chunk : chunks) {
+                if (chunk.getStatus() == SyncChunkStatus.RUNNING) {
+                    chunk.setStatus(SyncChunkStatus.PENDING);
+                    syncJobChunkRepository.save(chunk);
+                    resetChunks++;
+                }
+            }
+            job.setStatus(SyncJobStatus.FAILED);
+            job.setErrorMessage("Interrupted by application restart — retry to resume (completed chunks were preserved).");
+            job.setFinishedAt(LocalDateTime.now());
+            syncJobRepository.save(job);
+            log.warn("Reconciled orphaned sync job {} ({}, was {}): {} chunk(s) reset from RUNNING to PENDING.",
+                    job.getId(), job.getEntityType(), previousStatus, resetChunks);
+        }
+        if (!orphaned.isEmpty()) {
+            log.warn("Reconciled {} orphaned sync job(s) left over from a previous run — retry them via " +
+                    "POST /transaction/sync/binance/jobs/{{id}}/retry when ready.", orphaned.size());
+        }
+    }
+
     /** Resets a FAILED job's FAILED chunks back to PENDING (COMPLETED chunks are left untouched) and re-runs it. */
     public void retryJob(UUID jobId) {
         SyncJob job = syncJobRepository.findById(jobId)
