@@ -108,4 +108,46 @@ class BinanceSpotActivityServiceSpec extends Specification {
         response.trades[0].tradeId == 2L
         response.trades[0].side == 'SELL'
     }
+
+    def "excludes DEPOSIT/WITHDRAW rows so an off-chain-transfer deposit's non-numeric externalId never reaches the trade mapper"() {
+        given:
+        userExchangeConfigRepository.findByUserAndExchangeName(user, ExchangeName.BINANCE) >> Optional.of(configWith())
+        encryptionService.decrypt('encrypted-secret') >> 'plain-secret'
+        binanceApiService.getAccountInfo('api-key', 'plain-secret') >> Stub(BinanceAccountResponse) {
+            getBalances() >> []
+        }
+
+        def portfolio = Mock(Portfolio)
+        portfolioService.getByNameForUser(ExchangeName.BINANCE.name(), user) >> Optional.of(portfolio)
+
+        def deposit = Transaction.builder()
+                .side('DEPOSIT')
+                .symbol('BTC')
+                .externalId('Off-chain transfer 60285041508')
+                .executed(new BigDecimal('0.1'))
+                .dateUtc(LocalDateTime.of(2023, 11, 14, 22, 0, 0))
+                .exchangeName(ExchangeName.BINANCE)
+                .build()
+        def buyTx = Transaction.builder()
+                .side('BUY')
+                .pair('FETUSDT')
+                .symbol('FET')
+                .paidWith('USDT')
+                .externalId('1')
+                .executed(new BigDecimal('10'))
+                .paidAmount(new BigDecimal('25'))
+                .price(new BigDecimal('2.5'))
+                .dateUtc(LocalDateTime.of(2023, 11, 14, 22, 13, 20))
+                .exchangeName(ExchangeName.BINANCE)
+                .build()
+        transactionService.findByPortfolio(portfolio) >> [deposit, buyTx]
+
+        when:
+        def response = service.getSpotActivity(user)
+
+        then:
+        noExceptionThrown()
+        response.trades.size() == 1
+        response.trades[0].side == 'BUY'
+    }
 }

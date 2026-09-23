@@ -52,6 +52,9 @@ public class MexcSpotActivityService {
 
         List<MexcSpotTradeRowResponse> trades = dbTransactions.stream()
                 .filter(t -> t.getExchangeName() == ExchangeName.MEXC)
+                // DEPOSIT/WITHDRAW rows share this exchangeName tag but aren't trades — see the
+                // same filter (and why it's needed) in BinanceSpotActivityService.getSpotActivity.
+                .filter(t -> "BUY".equals(t.getSide()) || "SELL".equals(t.getSide()))
                 .map(this::mapToTradeRow)
                 .sorted(Comparator.comparing(MexcSpotTradeRowResponse::getTime, Comparator.nullsLast(Comparator.reverseOrder())))
                 .collect(Collectors.toList());
