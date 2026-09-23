@@ -180,3 +180,30 @@ retry resumes rather than restarts. Deliberately does **not** auto-retry — a d
 silently kick off a multi-hour Binance sync; the user (or the FE's `SyncJobsPanel`, which already
 shows a retry button on `FAILED` jobs) decides when. MexC's full sync isn't covered — it's still
 the older fire-and-forget design, not job-tracked.
+
+## Update (2026-09-23, later same day): `LazyInitializationException` on retry
+
+Hit immediately after the fix above: the user retried the reconciled 2026-09-16 batch and every
+`TRADES` chunk (plus one `DEPOSITS` chunk) failed with `could not initialize proxy
+[...Portfolio#...] - no Session`.
+
+Root cause: `runJob(UUID jobId)` — the single entry point used by both the initial trigger and
+`retryJob` — reloaded the job via plain `syncJobRepository.findById(jobId)`. `SyncJob.portfolio`
+is `@ManyToOne(LAZY)`, so `job.getPortfolio()` came back as an uninitialized proxy. Every chunk
+runner calls `portfolio.getUser()` (via `rawResponseService.saveResponse(...)`), which forces
+Hibernate to initialize that proxy — but by design (see above) nothing here has a spanning
+`@Transactional`, so the session backing that `findById` call had already closed by the time any
+chunk ran. `createSyncJobs` never hit this because it passes in the `Portfolio` it already fully
+loaded from `portfolioService.resolveExchangePortfolio(...)`, not a reloaded proxy.
+
+This had likely been latent since PR #65 — it just never surfaced, because the only batch to
+reach `runJob` before this one died within ~2 seconds of being triggered (the restart described
+above), before any chunk got far enough to call `portfolio.getUser()`. Today's retry was the
+first time `runJob` actually processed real chunks end to end.
+
+Fixed with `SyncJobRepository.findByIdWithPortfolioAndUser` — a `JOIN FETCH` query that eagerly
+loads `job.portfolio` and `portfolio.user` in the same query/session, so both are fully populated
+by the time `runJob` uses them, with no open session required afterward. `runJob` now uses this
+instead of plain `findById`. Kept deliberately narrow (one extra join-fetch query) rather than
+reintroducing any `@Transactional` around `runJob`, which would undo the whole point of this
+design — no ambient transaction means every `save()` still commits independently.

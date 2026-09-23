@@ -124,7 +124,7 @@ class BinanceFullSyncServiceSpec extends Specification {
         SyncJobChunk badChunk = SyncJobChunk.builder().id(UUID.randomUUID()).syncJob(job)
                 .chunkKey("500-1000").windowStartTime(500L).windowEndTime(1000L).status(SyncChunkStatus.PENDING).build()
 
-        syncJobRepository.findById(job.id) >> Optional.of(job)
+        syncJobRepository.findByIdWithPortfolioAndUser(job.id) >> Optional.of(job)
         syncJobChunkRepository.findBySyncJobOrderByChunkKey(job) >> [okChunk, badChunk]
         binanceApiService.getDepositHistory(*_) >>
                 [new BinanceDepositResponse(coin: "BTC", amount: BigDecimal.ONE, insertTime: 1L, txId: "tx1")] >>
@@ -154,7 +154,7 @@ class BinanceFullSyncServiceSpec extends Specification {
         SyncJobChunk pending = SyncJobChunk.builder().id(UUID.randomUUID()).syncJob(job)
                 .chunkKey("500-1000").windowStartTime(500L).windowEndTime(1000L).status(SyncChunkStatus.PENDING).build()
 
-        syncJobRepository.findById(job.id) >> Optional.of(job)
+        syncJobRepository.findByIdWithPortfolioAndUser(job.id) >> Optional.of(job)
         syncJobChunkRepository.findBySyncJobOrderByChunkKey(job) >> [alreadyDone, pending]
 
         when:
@@ -181,7 +181,8 @@ class BinanceFullSyncServiceSpec extends Specification {
                 .chunkKey("500-1000").windowStartTime(500L).windowEndTime(1000L)
                 .status(SyncChunkStatus.FAILED).errorMessage("boom").build()
 
-        syncJobRepository.findById(job.id) >>> [Optional.of(job), Optional.of(job)]
+        syncJobRepository.findById(job.id) >> Optional.of(job)
+        syncJobRepository.findByIdWithPortfolioAndUser(job.id) >> Optional.of(job)
         syncJobChunkRepository.findBySyncJobOrderByChunkKey(job) >> [completed, failed]
 
         when:

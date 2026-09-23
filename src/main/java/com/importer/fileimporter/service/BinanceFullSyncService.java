@@ -145,7 +145,7 @@ public class BinanceFullSyncService {
 
     /** Runs (or resumes) a job: executes every chunk not already COMPLETED, in order. */
     public void runJob(UUID jobId) {
-        SyncJob job = syncJobRepository.findById(jobId)
+        SyncJob job = syncJobRepository.findByIdWithPortfolioAndUser(jobId)
                 .orElseThrow(() -> new IllegalArgumentException("Sync job not found: " + jobId));
 
         job.setStatus(SyncJobStatus.RUNNING);
