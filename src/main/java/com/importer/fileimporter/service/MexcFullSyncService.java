@@ -45,7 +45,7 @@ public class MexcFullSyncService {
 
         String apiKey = config.getApiKey();
         String secretKey = encryptionService.decrypt(config.getApiSecret());
-        Portfolio portfolio = portfolioService.findOrSave(portfolioName, ExchangeName.MEXC);
+        Portfolio portfolio = portfolioService.resolveExchangePortfolio(portfolioName, ExchangeName.MEXC);
 
         long now = System.currentTimeMillis();
         long startTime = startDateEpochMs != null ? startDateEpochMs : START_TIME_2017;

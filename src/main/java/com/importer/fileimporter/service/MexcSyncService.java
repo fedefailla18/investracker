@@ -51,7 +51,7 @@ public class MexcSyncService {
 
         String apiKey = config.getApiKey();
         String secretKey = encryptionService.decrypt(config.getApiSecret());
-        Portfolio portfolio = portfolioService.findOrSave(portfolioName, ExchangeName.MEXC);
+        Portfolio portfolio = portfolioService.resolveExchangePortfolio(portfolioName, ExchangeName.MEXC);
 
         MexcAccountResponse accountInfo = mexcApiService.getAccountInfo(apiKey, secretKey);
         Set<String> investmentAssets = accountInfo.getBalances().stream()
@@ -110,6 +110,8 @@ public class MexcSyncService {
                 .paidAmount(trade.getQuoteQty())
                 .feeAmount(trade.getCommission())
                 .feeSymbol(trade.getCommissionAsset())
+                .externalId(trade.getId() != null ? trade.getId().toString() : null)
+                .exchangeName(ExchangeName.MEXC)
                 .created(LocalDateTime.now())
                 .createdBy("MexcSyncService")
                 .portfolio(portfolio)

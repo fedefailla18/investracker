@@ -9,7 +9,9 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class SyncStatusMessage {
     private String portfolioName;
-    /** "COMPLETED" or "FAILED" */
+    /** "COMPLETED", "FAILED" (legacy path), or "JOB_FINISHED" / "JOB_CRASHED" (job-model path) */
     private String status;
     private String message;
+    /** Present for job-model messages — the frontend refetches GET /transaction/sync/binance/jobs/{jobId}. */
+    private String jobId;
 }
