@@ -183,6 +183,7 @@ class BinanceFullSyncServiceSpec extends Specification {
 
         syncJobRepository.findById(job.id) >> Optional.of(job)
         syncJobRepository.findByIdWithPortfolioAndUser(job.id) >> Optional.of(job)
+        syncJobRepository.findByUserAndExchangeNameAndEntityTypeAndStatusIn(*_) >> Optional.empty()
         syncJobChunkRepository.findBySyncJobOrderByChunkKey(job) >> [completed, failed]
 
         when:
@@ -206,6 +207,31 @@ class BinanceFullSyncServiceSpec extends Specification {
 
         then:
         thrown(IllegalStateException)
+    }
+
+    def "retryJob refuses to run when a job of the same type is already active, without touching any chunks"() {
+        given: "an old FAILED job, plus a fresh trigger that already created a new active job of the same type"
+        SyncJob job = SyncJob.builder()
+                .id(UUID.randomUUID()).user(user).portfolio(portfolio).exchangeName(ExchangeName.BINANCE)
+                .entityType(SyncEntityType.TRADES).batchId(UUID.randomUUID())
+                .status(SyncJobStatus.FAILED).build()
+        SyncJobChunk failedChunk = SyncJobChunk.builder().id(UUID.randomUUID()).syncJob(job)
+                .chunkKey("BTCUSDT").status(SyncChunkStatus.FAILED).build()
+
+        syncJobRepository.findById(job.id) >> Optional.of(job)
+        syncJobRepository.findByUserAndExchangeNameAndEntityTypeAndStatusIn(
+                user, ExchangeName.BINANCE, SyncEntityType.TRADES, [SyncJobStatus.PENDING, SyncJobStatus.RUNNING]
+        ) >> Optional.of(Mock(SyncJob))
+        syncJobChunkRepository.findBySyncJobOrderByChunkKey(job) >> [failedChunk]
+
+        when:
+        service.retryJob(job.id)
+
+        then:
+        thrown(SyncJobAlreadyRunningException)
+        job.status == SyncJobStatus.FAILED // untouched — the guard runs before any mutation
+        failedChunk.status == SyncChunkStatus.FAILED // untouched
+        0 * syncJobChunkRepository.save(_)
     }
 
     // ── reconcileOrphanedJobs ────────────────────────────────────────────────────

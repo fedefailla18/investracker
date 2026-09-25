@@ -74,6 +74,16 @@ public class BinanceAsyncSyncService {
     }
 
     /**
+     * Synchronous pre-check the controller can call before dispatching {@link #retryJobAsync} —
+     * throws {@link SyncJobAlreadyRunningException} if a job of this job's type is already
+     * active, giving the common case an immediate 409 instead of a delayed WebSocket crash toast
+     * once the queued async retry eventually hits the same check (or the DB constraint) itself.
+     */
+    public void ensureNoConflictingActiveJob(SyncJob job) {
+        binanceFullSyncService.ensureNoConflictingActiveJob(job);
+    }
+
+    /**
      * Creates the (up to 5) {@link SyncJob}s for a full-history sync request and kicks off async
      * execution of each. Returns immediately with the created jobs so the controller can hand
      * their ids back to the caller (202 response).

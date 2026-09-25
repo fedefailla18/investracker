@@ -296,7 +296,8 @@ public class TransactionController {
     }
 
     @Operation(summary = "Retry a failed Binance sync job",
-            description = "Only chunks (symbols/date windows) that failed are re-run — chunks already COMPLETED are left untouched. 400 if the job isn't currently FAILED.")
+            description = "Only chunks (symbols/date windows) that failed are re-run — chunks already COMPLETED are left untouched. " +
+                    "400 if the job isn't currently FAILED, 409 if a job of the same type is already in progress.")
     @PostMapping("/sync/binance/jobs/{jobId}/retry")
     public ResponseEntity<?> retryBinanceSyncJob(@AuthenticationPrincipal User user, @PathVariable UUID jobId) {
         return syncJobRepository.findById(jobId)
@@ -304,6 +305,11 @@ public class TransactionController {
                 .map(job -> {
                     if (job.getStatus() != SyncJobStatus.FAILED) {
                         return ResponseEntity.badRequest().body("Only a FAILED job can be retried (current status: " + job.getStatus() + ")");
+                    }
+                    try {
+                        binanceAsyncSyncService.ensureNoConflictingActiveJob(job);
+                    } catch (SyncJobAlreadyRunningException e) {
+                        return ResponseEntity.status(HttpStatus.CONFLICT).body(e.getMessage());
                     }
                     binanceAsyncSyncService.retryJobAsync(jobId, user.getUsername());
                     return ResponseEntity.accepted().body("Retry started for job " + jobId);

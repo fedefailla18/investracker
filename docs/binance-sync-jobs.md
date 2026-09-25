@@ -207,3 +207,37 @@ by the time `runJob` uses them, with no open session required afterward. `runJob
 instead of plain `findById`. Kept deliberately narrow (one extra join-fetch query) rather than
 reintroducing any `@Transactional` around `runJob`, which would undo the whole point of this
 design — no ambient transaction means every `save()` still commits independently.
+
+## Update (2026-09-25): retry racing a fresh trigger of the same type
+
+Also hit live: with a `FAILED` `TRADES` job sitting around, the user triggered a brand-new full
+sync — `createSyncJobs`'s active-job pre-check only excludes `PENDING`/`RUNNING`, not `FAILED`,
+so it happily created a second `TRADES` job. Separately, a retry of the old `FAILED` job was also
+in flight — `syncTaskExecutor` only has 2-4 threads (see `AsyncConfig`), so under load a queued
+task can easily sit for several minutes before it gets one, which is exactly the window this race
+needs. When the retry's `runJob` finally flipped the old job back to `PENDING`, it collided with
+the new job at the `uk_sync_job_active` partial unique index — surfacing as a raw, unhandled
+`DataIntegrityViolationException` (ugly logs, plus a confusing "sync job crashed unexpectedly:
+<SQL text>" toast on the frontend, since `retryJobAsync`'s catch-all passes `e.getMessage()`
+straight through to the WebSocket notification).
+
+`createSyncJobs` already guarded against this shape of race for job *creation* — a synchronous
+pre-check via `findByUserAndExchangeNameAndEntityTypeAndStatusIn(...ACTIVE_STATUSES)`, plus a
+`catch (DataIntegrityViolationException)` around the `save()` as a last-resort net for the
+remaining TOCTOU gap. `retryJob` had neither. Fixed by extracting that pre-check into a shared
+`BinanceFullSyncService.ensureNoConflictingActiveJob(...)`, used by both `createSyncJobs` and
+`retryJob` (called right before `retryJob` touches any chunk, so a conflict is caught before any
+mutation happens), plus the same `DataIntegrityViolationException` catch around `retryJob`'s own
+`save()`. The retry controller endpoint also calls the guard synchronously (via a thin
+`BinanceAsyncSyncService.ensureNoConflictingActiveJob` passthrough) before dispatching the async
+retry, so the common case — the conflict is already visible at click time — now gets an immediate
+409 instead of a delayed WebSocket crash toast. No new exception type, no migration, no FE changes
+needed (`SyncJobsPanel` already renders whatever `errorMessage`/toast message it's given).
+
+Deliberately not fixed here (flagged as a separate, later decision if it becomes a real problem):
+`createSyncJobs` still creates a brand-new job every time, even when a `FAILED` job of the same
+type already exists — nothing reuses or auto-retries it, so `FAILED` rows for a given
+(user, exchange, entityType) can accumulate over repeated trigger-without-retry cycles. Reusing
+the old job isn't a mechanical fix: if the new trigger's date range differs from the old failed
+job's, "reuse" needs a real answer for what that means, which is a product question, not a
+one-liner.

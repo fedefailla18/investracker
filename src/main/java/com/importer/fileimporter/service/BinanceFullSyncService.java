@@ -61,8 +61,7 @@ public class BinanceFullSyncService {
                 .orElseThrow(() -> new IllegalArgumentException("Binance API keys not configured for user"));
 
         for (SyncEntityType type : SyncEntityType.values()) {
-            syncJobRepository.findByUserAndExchangeNameAndEntityTypeAndStatusIn(user, ExchangeName.BINANCE, type, ACTIVE_STATUSES)
-                    .ifPresent(existing -> { throw new SyncJobAlreadyRunningException(type); });
+            ensureNoConflictingActiveJob(user, ExchangeName.BINANCE, type);
         }
 
         String apiKey = config.getApiKey();
@@ -219,6 +218,25 @@ public class BinanceFullSyncService {
         }
     }
 
+    /**
+     * Throws {@link SyncJobAlreadyRunningException} if a job of this type is already
+     * PENDING/RUNNING for this user+exchange. Shared by {@link #createSyncJobs} (about to create
+     * a new job) and {@link #retryJob} (about to revive a FAILED one back to PENDING) — both are
+     * "about to make this (user, exchange, entityType) tuple active" and need the same check.
+     * Also enforced at the DB level by the {@code uk_sync_job_active} partial unique index, so a
+     * race between two concurrent calls can't slip past this pre-check either — see the
+     * {@code DataIntegrityViolationException} catches around the actual {@code save()} calls.
+     */
+    public void ensureNoConflictingActiveJob(User user, ExchangeName exchangeName, SyncEntityType entityType) {
+        syncJobRepository.findByUserAndExchangeNameAndEntityTypeAndStatusIn(user, exchangeName, entityType, ACTIVE_STATUSES)
+                .ifPresent(existing -> { throw new SyncJobAlreadyRunningException(entityType); });
+    }
+
+    /** Convenience overload for callers (e.g. the controller, before dispatching an async retry) that already have the job. */
+    public void ensureNoConflictingActiveJob(SyncJob job) {
+        ensureNoConflictingActiveJob(job.getUser(), job.getExchangeName(), job.getEntityType());
+    }
+
     /** Resets a FAILED job's FAILED chunks back to PENDING (COMPLETED chunks are left untouched) and re-runs it. */
     public void retryJob(UUID jobId) {
         SyncJob job = syncJobRepository.findById(jobId)
@@ -226,6 +244,7 @@ public class BinanceFullSyncService {
         if (job.getStatus() != SyncJobStatus.FAILED) {
             throw new IllegalStateException("Only a FAILED job can be retried (current status: " + job.getStatus() + ")");
         }
+        ensureNoConflictingActiveJob(job);
 
         List<SyncJobChunk> chunks = syncJobChunkRepository.findBySyncJobOrderByChunkKey(job);
         for (SyncJobChunk chunk : chunks) {
@@ -241,7 +260,11 @@ public class BinanceFullSyncService {
         job.setErrorMessage(null);
         job.setStartedAt(null);
         job.setFinishedAt(null);
-        syncJobRepository.save(job);
+        try {
+            syncJobRepository.save(job);
+        } catch (DataIntegrityViolationException e) {
+            throw new SyncJobAlreadyRunningException(job.getEntityType());
+        }
 
         runJob(jobId);
     }
