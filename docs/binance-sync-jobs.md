@@ -241,3 +241,29 @@ type already exists — nothing reuses or auto-retries it, so `FAILED` rows for 
 the old job isn't a mechanical fix: if the new trigger's date range differs from the old failed
 job's, "reuse" needs a real answer for what that means, which is a product question, not a
 one-liner.
+
+## Update (2026-09-27): Activity pages redesigned — balances now valued in USDT/BTC
+
+Not a sync-job change, but lands in the same feature line: the Binance/MexC Activity pages'
+"Spot Balances Snapshot" mysteriously omitted BTC/ETH holdings. Root cause: the FE capped the
+snapshot to the first 20 balances, and `BinanceSpotActivityService`/`MexcSpotActivityService`
+sorted balances by raw `total` **quantity** — so a small-quantity, high-value asset (0.01 BTC)
+ranked below large-quantity dust (144,200 RSR) and fell outside the cap.
+
+Fixed by attaching `valueUsdt`/`valueBtc` to every balance and sorting by value instead of
+quantity (the FE cap was removed too, now that the section is a collapsible accordion). Also added
+`totalValueUsdt`/`totalValueBtc` to the summary for a new headline "Total Spot Balance Value"
+figure, toggleable between USDT and BTC.
+
+Found and fixed a real, previously-dormant bug along the way: the only existing batch-pricing
+method, `GetSymbolHistoricPriceHelper.getPrice(List<String>)` / `PricingFacade.getPrices(List<String>)`, declared `Map<String, Double>` but `CryptoCompareProxy`'s `/pricemulti` call actually
+returns a nested `Map<String, Map<String, Double>>` per symbol — an unchecked raw-`Map` cast that
+would have thrown `ClassCastException` the moment anyone read a value as a `Double`. Never
+exercised in practice because nothing called this overload except one unused controller
+passthrough (`PricingController`, `GET /pricing?symbols=...`). Fixed the return type and parsing;
+this is what lets the new valuation feature use one batch external call per refresh instead of
+~30 sequential ones.
+
+FE also replaced the plain-text "Filter by symbol" field with an `Autocomplete` (options = distinct
+traded base assets) and turned "Spot Balances Snapshot"/"Trades" into two independent accordions
+(balances expanded by default, trades collapsed) — applied identically to both `BinanceSpotActivityPage.tsx` and `MexcSpotActivityPage.tsx`, which are kept in lockstep.
