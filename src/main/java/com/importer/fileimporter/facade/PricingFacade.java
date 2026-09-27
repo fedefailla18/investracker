@@ -105,8 +105,9 @@ public class PricingFacade {
         });
     }
 
-    public Map<String, Double> getPrices(List<String> symbol) {
-        return getSymbolHistoricPriceHelper.getPrice(symbol);
+    /** Batch price lookup — see {@link GetSymbolHistoricPriceHelper#getPrice(List)}. */
+    public Map<String, Map<String, Double>> getPrices(List<String> symbols) {
+        return getSymbolHistoricPriceHelper.getPrice(symbols);
     }
 
 }

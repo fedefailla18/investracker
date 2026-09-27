@@ -16,6 +16,8 @@ public class BinanceSpotActivitySummaryResponse {
     private Integer sellTradeCount;
     private BigDecimal grossBuyQuoteQty;
     private BigDecimal grossSellQuoteQty;
+    private BigDecimal totalValueUsdt;
+    private BigDecimal totalValueBtc;
     private Long fetchedAt;
     private Long lastSyncTimestamp;
 }

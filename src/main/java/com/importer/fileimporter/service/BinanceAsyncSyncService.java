@@ -3,6 +3,7 @@ package com.importer.fileimporter.service;
 import com.importer.fileimporter.dto.integration.binance.BinanceAccountResponse;
 import com.importer.fileimporter.dto.integration.binance.BinanceExchangeInfoResponse;
 import com.importer.fileimporter.entity.ExchangeName;
+import com.importer.fileimporter.entity.SyncJob;
 import com.importer.fileimporter.entity.User;
 import com.importer.fileimporter.entity.UserExchangeConfig;
 import com.importer.fileimporter.repository.UserExchangeConfigRepository;
@@ -14,6 +15,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
@@ -71,16 +73,51 @@ public class BinanceAsyncSyncService {
         }
     }
 
+    /**
+     * Synchronous pre-check the controller can call before dispatching {@link #retryJobAsync} —
+     * throws {@link SyncJobAlreadyRunningException} if a job of this job's type is already
+     * active, giving the common case an immediate 409 instead of a delayed WebSocket crash toast
+     * once the queued async retry eventually hits the same check (or the DB constraint) itself.
+     */
+    public void ensureNoConflictingActiveJob(SyncJob job) {
+        binanceFullSyncService.ensureNoConflictingActiveJob(job);
+    }
+
+    /**
+     * Creates the (up to 5) {@link SyncJob}s for a full-history sync request and kicks off async
+     * execution of each. Returns immediately with the created jobs so the controller can hand
+     * their ids back to the caller (202 response).
+     */
+    public List<SyncJob> triggerFullSyncJobs(User user, String portfolioName, Long startDate, Long endDate) {
+        List<SyncJob> jobs = binanceFullSyncService.createSyncJobs(user, portfolioName, startDate, endDate);
+        for (SyncJob job : jobs) {
+            runJobAsync(job.getId(), user.getUsername(), portfolioName);
+        }
+        return jobs;
+    }
+
     @Async("syncTaskExecutor")
-    public void syncFullHistoryAsync(User user, String portfolioName, Long startDate, Long endDate) {
-        log.info("Starting background full history sync for user: {} portfolio: {}", user.getUsername(), portfolioName);
+    public void runJobAsync(UUID jobId, String username, String portfolioName) {
+        log.info("Starting sync job {} for user: {} portfolio: {}", jobId, username, portfolioName);
         try {
-            binanceFullSyncService.syncFullHistory(user, portfolioName, startDate, endDate);
-            log.info("Background full history sync completed for user: {}", user.getUsername());
-            syncNotificationService.notifyCompleted(user.getUsername(), portfolioName);
+            binanceFullSyncService.runJob(jobId);
+            log.info("Sync job {} finished for user: {}", jobId, username);
+            syncNotificationService.notifyJobFinished(username, jobId);
         } catch (Exception e) {
-            log.error("Failed background full history sync for user {}: {}", user.getUsername(), e.getMessage(), e);
-            syncNotificationService.notifyFailed(user.getUsername(), portfolioName, e.getMessage());
+            log.error("Sync job {} crashed for user {}: {}", jobId, username, e.getMessage(), e);
+            syncNotificationService.notifyJobCrashed(username, jobId, e.getMessage());
+        }
+    }
+
+    @Async("syncTaskExecutor")
+    public void retryJobAsync(UUID jobId, String username) {
+        log.info("Retrying sync job {} for user: {}", jobId, username);
+        try {
+            binanceFullSyncService.retryJob(jobId);
+            syncNotificationService.notifyJobFinished(username, jobId);
+        } catch (Exception e) {
+            log.error("Retry of sync job {} crashed for user {}: {}", jobId, username, e.getMessage(), e);
+            syncNotificationService.notifyJobCrashed(username, jobId, e.getMessage());
         }
     }
 }

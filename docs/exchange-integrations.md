@@ -14,20 +14,38 @@ Configuration and synchronization specifications for Binance, MEXC, and Invertir
 
 Manage credentials via [`ExchangeConfigController`](../src/main/java/com/importer/fileimporter/controller/ExchangeConfigController.java) or [Swagger UI](http://localhost:9080/swagger-ui.html#/Exchange%20Config):
 
-- `POST /api/exchange/config`: Encrypts credentials with AES-256 (`EncryptionService`) before persisting. Automatically initializes a matching portfolio.
+- `POST /api/exchange/config`: Encrypts credentials with AES-256 (`EncryptionService`) before persisting. Automatically initializes that exchange's **dedicated** portfolio (`Portfolio.exchangeName` set, e.g. `BINANCE`) — kept separate from the user's manually-managed portfolio(s) on purpose; see "Portfolio vs Exchanges" in [architecture.md](architecture.md).
 - `GET /api/exchange/config`: Retrieves stored configs with masked secret fields.
 - **IOL Credentials**: `apiKey` maps to username; `apiSecret` maps to password.
 
 ## Synchronization Endpoints
 
+`portfolio` on every sync endpoint below must name that exchange's dedicated portfolio (defaults
+to the exchange's own name, e.g. `BINANCE`, if omitted) — **400** if it names a manually-managed
+portfolio or a different exchange's portfolio (`PortfolioNotExchangeOwnedException`). A sync never
+writes into the user's manual portfolio; use `POST /portfolio/consolidate` to bring synced data
+into it explicitly once reviewed.
+
 | Endpoint | Execution | Description |
 |---|---|---|
 | `POST /transaction/sync/binance?portfolio=<name>` | Sync | Incremental spot trades since `lastSyncTimestamp` for currently-held assets. |
 | `POST /transaction/sync/mexc?portfolio=<name>` | Sync | Incremental spot trades since `lastSyncTimestamp`. |
-| `POST /transaction/sync/binance/full?portfolio=<name>` | Async (202) | Full history (trades, deposits, withdrawals, fiat, convert). Status sent via WebSocket `/user/queue/sync-status`. |
-| `POST /transaction/sync/mexc/full?portfolio=<name>` | Async (202) | Full history (trades, deposits, withdrawals). |
+| `POST /transaction/sync/binance/full?portfolio=<name>&startDate=&endDate=` | Async (202) | Creates one resumable, independently-retryable `SyncJob` per data type (trades/deposits/withdrawals/fiat/convert) — see [binance-sync-jobs.md](binance-sync-jobs.md) for the full job/chunk design. |
+| `GET /transaction/sync/binance/jobs` / `GET .../jobs/{id}` | Sync | Job status/history — the `SyncJob`s created above, newest first, or one job's full chunk breakdown. |
+| `POST /transaction/sync/binance/jobs/{id}/retry` | Sync (kicks off async work) | Retries only a job's FAILED chunks; COMPLETED chunks are untouched. |
+| `POST /transaction/sync/mexc/full?portfolio=<name>` | Async (202) | Full history (trades, deposits, withdrawals) — still the older fire-and-forget design (not yet migrated to the job/chunk model). |
 
 Optional parameters for full sync: `startDate`, `endDate` (epoch milliseconds; default: `2017-01-01` to current timestamp).
+
+## Consolidating exchange data into a manual portfolio
+
+`POST /portfolio/consolidate?source=<exchangePortfolio>&target=<manualPortfolio>` moves every
+transaction from `source` (must have `exchangeName` set) onto `target` (must be manually-managed,
+`exchangeName == null`) — skipping any that would collide with something already on the target,
+so it's safe to call again after a later sync. See "Portfolio vs Exchanges" in
+[architecture.md](architecture.md) for why this is a separate, explicit step rather than
+something sync does automatically. `GET /portfolio/mine` lists the current user's portfolios with
+their `exchangeName`, for building a "consolidate from" picker.
 
 ## Diagnostic & Direct Endpoints
 

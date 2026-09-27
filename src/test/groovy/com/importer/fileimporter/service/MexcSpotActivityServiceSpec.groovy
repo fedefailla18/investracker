@@ -1,28 +1,29 @@
 package com.importer.fileimporter.service
 
-import com.importer.fileimporter.dto.integration.binance.BinanceAccountResponse
+import com.importer.fileimporter.dto.integration.mexc.MexcAccountResponse
 import com.importer.fileimporter.entity.ExchangeName
 import com.importer.fileimporter.entity.Portfolio
 import com.importer.fileimporter.entity.Transaction
 import com.importer.fileimporter.entity.User
 import com.importer.fileimporter.entity.UserExchangeConfig
+import com.importer.fileimporter.facade.PricingFacade
 import com.importer.fileimporter.repository.UserExchangeConfigRepository
 import spock.lang.Specification
 
 import java.math.BigDecimal
 import java.time.LocalDateTime
 
-class BinanceSpotActivityServiceSpec extends Specification {
+class MexcSpotActivityServiceSpec extends Specification {
 
-    def binanceApiService = Mock(BinanceApiService)
+    def mexcApiService = Mock(MexcApiService)
     def userExchangeConfigRepository = Mock(UserExchangeConfigRepository)
     def encryptionService = Mock(EncryptionService)
     def transactionService = Mock(TransactionService)
     def portfolioService = Mock(PortfolioService)
-    def pricingFacade = Mock(com.importer.fileimporter.facade.PricingFacade)
+    def pricingFacade = Mock(PricingFacade)
 
-    def service = new BinanceSpotActivityService(
-            binanceApiService,
+    def service = new MexcSpotActivityService(
+            mexcApiService,
             userExchangeConfigRepository,
             encryptionService,
             transactionService,
@@ -33,8 +34,6 @@ class BinanceSpotActivityServiceSpec extends Specification {
     def user = Mock(User)
 
     def setup() {
-        // FET priced low, USDT/BTC priced so USDT ($100 held) still outvalues FET ($6.25 held) —
-        // keeps the pre-existing ordering assertions below meaningful under value-based sorting.
         pricingFacade.getPrices(_) >> [
                 FET : [USDT: 0.5d, BTC: 0.00001d],
                 USDT: [USDT: 1.0d, BTC: 0.0000153d],
@@ -50,8 +49,8 @@ class BinanceSpotActivityServiceSpec extends Specification {
         }
     }
 
-    private BinanceAccountResponse.AssetBalance balance(String asset, String free, String locked = '0') {
-        Stub(BinanceAccountResponse.AssetBalance) {
+    private MexcAccountResponse.AssetBalance balance(String asset, String free, String locked = '0') {
+        Stub(MexcAccountResponse.AssetBalance) {
             getAsset() >> asset
             getFree() >> new BigDecimal(free)
             getLocked() >> new BigDecimal(locked)
@@ -60,19 +59,19 @@ class BinanceSpotActivityServiceSpec extends Specification {
 
     def "should return fresh balances and raw spot trade summary"() {
         given:
-        userExchangeConfigRepository.findByUserAndExchangeName(user, ExchangeName.BINANCE) >> Optional.of(configWith())
+        userExchangeConfigRepository.findByUserAndExchangeName(user, ExchangeName.MEXC) >> Optional.of(configWith())
         encryptionService.decrypt('encrypted-secret') >> 'plain-secret'
-        def accountInfo = Stub(BinanceAccountResponse) {
+        def accountInfo = Stub(MexcAccountResponse) {
             getBalances() >> [
                     balance('FET', '12.5'),
                     balance('USDT', '100'),
-                    balance('BTC', '0')
+                    balance('BTC', '0'),
             ]
         }
-        binanceApiService.getAccountInfo('api-key', 'plain-secret') >> accountInfo
+        mexcApiService.getAccountInfo('api-key', 'plain-secret') >> accountInfo
 
         def portfolio = Mock(Portfolio)
-        portfolioService.getByNameForUser(ExchangeName.BINANCE.name(), user) >> Optional.of(portfolio)
+        portfolioService.getByNameForUser(ExchangeName.MEXC.name(), user) >> Optional.of(portfolio)
 
         def buyTx = Transaction.builder()
                 .side('BUY')
@@ -83,10 +82,10 @@ class BinanceSpotActivityServiceSpec extends Specification {
                 .executed(new BigDecimal('10'))
                 .paidAmount(new BigDecimal('25'))
                 .feeAmount(new BigDecimal('0.01'))
-                .feeSymbol('BNB')
+                .feeSymbol('MX')
                 .price(new BigDecimal('2.5'))
                 .dateUtc(LocalDateTime.of(2023, 11, 14, 22, 13, 20))
-                .exchangeName(ExchangeName.BINANCE)
+                .exchangeName(ExchangeName.MEXC)
                 .build()
         def sellTx = Transaction.builder()
                 .side('SELL')
@@ -97,10 +96,10 @@ class BinanceSpotActivityServiceSpec extends Specification {
                 .executed(new BigDecimal('2'))
                 .paidAmount(new BigDecimal('6'))
                 .feeAmount(new BigDecimal('0.01'))
-                .feeSymbol('BNB')
+                .feeSymbol('MX')
                 .price(new BigDecimal('2.5'))
                 .dateUtc(LocalDateTime.of(2023, 11, 14, 22, 15, 0))
-                .exchangeName(ExchangeName.BINANCE)
+                .exchangeName(ExchangeName.MEXC)
                 .build()
         transactionService.findByPortfolio(portfolio) >> [buyTx, sellTx]
 
@@ -121,24 +120,24 @@ class BinanceSpotActivityServiceSpec extends Specification {
         response.trades[0].side == 'SELL'
     }
 
-    def "excludes DEPOSIT/WITHDRAW rows so an off-chain-transfer deposit's non-numeric externalId never reaches the trade mapper"() {
+    def "excludes DEPOSIT/WITHDRAW rows so a non-numeric externalId never reaches the trade mapper"() {
         given:
-        userExchangeConfigRepository.findByUserAndExchangeName(user, ExchangeName.BINANCE) >> Optional.of(configWith())
+        userExchangeConfigRepository.findByUserAndExchangeName(user, ExchangeName.MEXC) >> Optional.of(configWith())
         encryptionService.decrypt('encrypted-secret') >> 'plain-secret'
-        binanceApiService.getAccountInfo('api-key', 'plain-secret') >> Stub(BinanceAccountResponse) {
+        mexcApiService.getAccountInfo('api-key', 'plain-secret') >> Stub(MexcAccountResponse) {
             getBalances() >> []
         }
 
         def portfolio = Mock(Portfolio)
-        portfolioService.getByNameForUser(ExchangeName.BINANCE.name(), user) >> Optional.of(portfolio)
+        portfolioService.getByNameForUser(ExchangeName.MEXC.name(), user) >> Optional.of(portfolio)
 
-        def deposit = Transaction.builder()
-                .side('DEPOSIT')
+        def withdrawal = Transaction.builder()
+                .side('WITHDRAW')
                 .symbol('BTC')
-                .externalId('Off-chain transfer 60285041508')
+                .externalId('non-numeric-ref-123')
                 .executed(new BigDecimal('0.1'))
                 .dateUtc(LocalDateTime.of(2023, 11, 14, 22, 0, 0))
-                .exchangeName(ExchangeName.BINANCE)
+                .exchangeName(ExchangeName.MEXC)
                 .build()
         def buyTx = Transaction.builder()
                 .side('BUY')
@@ -150,9 +149,9 @@ class BinanceSpotActivityServiceSpec extends Specification {
                 .paidAmount(new BigDecimal('25'))
                 .price(new BigDecimal('2.5'))
                 .dateUtc(LocalDateTime.of(2023, 11, 14, 22, 13, 20))
-                .exchangeName(ExchangeName.BINANCE)
+                .exchangeName(ExchangeName.MEXC)
                 .build()
-        transactionService.findByPortfolio(portfolio) >> [deposit, buyTx]
+        transactionService.findByPortfolio(portfolio) >> [withdrawal, buyTx]
 
         when:
         def response = service.getSpotActivity(user)
@@ -165,12 +164,12 @@ class BinanceSpotActivityServiceSpec extends Specification {
 
     def "sorts balances by USDT value, not raw quantity — a small-quantity/high-value asset outranks large-quantity/low-value dust"() {
         given: "144,200 RSR (dust) vs 0.01 BTC — BTC is worth far more despite the tiny quantity"
-        userExchangeConfigRepository.findByUserAndExchangeName(user, ExchangeName.BINANCE) >> Optional.of(configWith())
+        userExchangeConfigRepository.findByUserAndExchangeName(user, ExchangeName.MEXC) >> Optional.of(configWith())
         encryptionService.decrypt('encrypted-secret') >> 'plain-secret'
-        binanceApiService.getAccountInfo('api-key', 'plain-secret') >> Stub(BinanceAccountResponse) {
+        mexcApiService.getAccountInfo('api-key', 'plain-secret') >> Stub(MexcAccountResponse) {
             getBalances() >> [balance('RSR', '144200'), balance('BTC', '0.01')]
         }
-        portfolioService.getByNameForUser(ExchangeName.BINANCE.name(), user) >> Optional.empty()
+        portfolioService.getByNameForUser(ExchangeName.MEXC.name(), user) >> Optional.empty()
         pricingFacade.getPrices(_) >> [
                 RSR: [USDT: 0.001d, BTC: 0.0000000001d],
                 BTC: [USDT: 65000.0d, BTC: 1.0d],

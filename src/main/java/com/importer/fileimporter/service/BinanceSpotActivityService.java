@@ -6,18 +6,23 @@ import com.importer.fileimporter.entity.Portfolio;
 import com.importer.fileimporter.entity.Transaction;
 import com.importer.fileimporter.entity.User;
 import com.importer.fileimporter.entity.UserExchangeConfig;
+import com.importer.fileimporter.facade.PricingFacade;
 import com.importer.fileimporter.payload.response.BinanceAssetBalanceResponse;
 import com.importer.fileimporter.payload.response.BinanceSpotActivityResponse;
 import com.importer.fileimporter.payload.response.BinanceSpotActivitySummaryResponse;
 import com.importer.fileimporter.payload.response.BinanceSpotTradeRowResponse;
 import com.importer.fileimporter.repository.UserExchangeConfigRepository;
+import com.importer.fileimporter.utils.OperationUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -35,6 +40,7 @@ public class BinanceSpotActivityService {
     private final EncryptionService encryptionService;
     private final TransactionService transactionService;
     private final PortfolioService portfolioService;
+    private final PricingFacade pricingFacade;
 
     public BinanceSpotActivityResponse getSpotActivity(User user) {
         UserExchangeConfig config = userExchangeConfigRepository.findByUserAndExchangeName(user, ExchangeName.BINANCE)
@@ -45,7 +51,7 @@ public class BinanceSpotActivityService {
 
         // 1. Get real-time balances from API
         BinanceAccountResponse accountInfo = binanceApiService.getAccountInfo(apiKey, secretKey);
-        List<BinanceAssetBalanceResponse> balances = mapNonZeroBalances(accountInfo);
+        List<BinanceAssetBalanceResponse> balances = valuateAndSortBalances(mapNonZeroBalances(accountInfo));
 
         // 2. Fetch processed trades from local database instead of API crawl
         Portfolio portfolio = portfolioService.getByNameForUser(ExchangeName.BINANCE.name(), user)
@@ -57,6 +63,11 @@ public class BinanceSpotActivityService {
 
         List<BinanceSpotTradeRowResponse> trades = dbTransactions.stream()
                 .filter(t -> t.getExchangeName() == ExchangeName.BINANCE)
+                // DEPOSIT/WITHDRAW rows share this exchangeName tag but aren't trades — their
+                // externalId is Binance's deposit txId, which for off-chain transfers is free text
+                // (e.g. "Off-chain transfer 60285041508"), not a numeric trade id. mapToTradeRow
+                // parses externalId as a Long, so including them here 500s the whole endpoint.
+                .filter(t -> "BUY".equals(t.getSide()) || "SELL".equals(t.getSide()))
                 .map(this::mapToTradeRow)
                 .sorted(Comparator.comparing(BinanceSpotTradeRowResponse::getTime, Comparator.nullsLast(Comparator.reverseOrder())))
                 .collect(Collectors.toList());
@@ -81,6 +92,8 @@ public class BinanceSpotActivityService {
                 .sellTradeCount((int) trades.stream().filter(trade -> "SELL".equals(trade.getSide())).count())
                 .grossBuyQuoteQty(grossBuyQuoteQty)
                 .grossSellQuoteQty(grossSellQuoteQty)
+                .totalValueUsdt(balances.stream().map(BinanceAssetBalanceResponse::getValueUsdt).reduce(BigDecimal.ZERO, BigDecimal::add))
+                .totalValueBtc(balances.stream().map(BinanceAssetBalanceResponse::getValueBtc).reduce(BigDecimal.ZERO, BigDecimal::add))
                 .fetchedAt(System.currentTimeMillis())
                 .lastSyncTimestamp(config.getLastSyncTimestamp())
                 .build();
@@ -105,7 +118,44 @@ public class BinanceSpotActivityService {
                         .locked(balance.getLocked())
                         .total(balance.getFree().add(balance.getLocked()))
                         .build())
-                .sorted(Comparator.comparing(BinanceAssetBalanceResponse::getTotal, Comparator.reverseOrder()))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Attaches valueUsdt/valueBtc to every balance (one batch pricing call covering every held
+     * asset plus BTC/USDT, so a coherent conversion table is always available even for assets not
+     * priced against each other directly) and sorts by valueUsdt descending — replacing the old
+     * raw-quantity sort. That old sort is why a small-quantity, high-value holding (e.g. 0.01 BTC)
+     * could rank below large-quantity dust and fall outside a client-side "top N" cutoff, even
+     * though it was worth far more — this is the actual fix for that.
+     */
+    private List<BinanceAssetBalanceResponse> valuateAndSortBalances(List<BinanceAssetBalanceResponse> balances) {
+        if (balances.isEmpty()) {
+            return balances;
+        }
+
+        List<String> symbols = new ArrayList<>(balances.stream()
+                .map(BinanceAssetBalanceResponse::getAsset)
+                .collect(Collectors.toSet()));
+        if (!symbols.contains(OperationUtils.BTC)) {
+            symbols.add(OperationUtils.BTC);
+        }
+        if (!symbols.contains(OperationUtils.USDT)) {
+            symbols.add(OperationUtils.USDT);
+        }
+        Map<String, Map<String, Double>> prices = pricingFacade.getPrices(symbols);
+
+        return balances.stream()
+                .peek(balance -> {
+                    Map<String, Double> assetPrices = prices.getOrDefault(balance.getAsset(), Map.of());
+                    BigDecimal usdtPrice = Optional.ofNullable(assetPrices.get(OperationUtils.USDT))
+                            .map(BigDecimal::valueOf).orElse(BigDecimal.ZERO);
+                    BigDecimal btcPrice = Optional.ofNullable(assetPrices.get(OperationUtils.BTC))
+                            .map(BigDecimal::valueOf).orElse(BigDecimal.ZERO);
+                    balance.setValueUsdt(balance.getTotal().multiply(usdtPrice));
+                    balance.setValueBtc(balance.getTotal().multiply(btcPrice));
+                })
+                .sorted(Comparator.comparing(BinanceAssetBalanceResponse::getValueUsdt, Comparator.reverseOrder()))
                 .collect(Collectors.toList());
     }
 
