@@ -6,18 +6,23 @@ import com.importer.fileimporter.entity.Portfolio;
 import com.importer.fileimporter.entity.Transaction;
 import com.importer.fileimporter.entity.User;
 import com.importer.fileimporter.entity.UserExchangeConfig;
+import com.importer.fileimporter.facade.PricingFacade;
 import com.importer.fileimporter.payload.response.MexcAssetBalanceResponse;
 import com.importer.fileimporter.payload.response.MexcSpotActivityResponse;
 import com.importer.fileimporter.payload.response.MexcSpotActivitySummaryResponse;
 import com.importer.fileimporter.payload.response.MexcSpotTradeRowResponse;
 import com.importer.fileimporter.repository.UserExchangeConfigRepository;
+import com.importer.fileimporter.utils.OperationUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Service
@@ -30,6 +35,7 @@ public class MexcSpotActivityService {
     private final EncryptionService encryptionService;
     private final TransactionService transactionService;
     private final PortfolioService portfolioService;
+    private final PricingFacade pricingFacade;
 
     public MexcSpotActivityResponse getSpotActivity(User user) {
         UserExchangeConfig config = userExchangeConfigRepository.findByUserAndExchangeName(user, ExchangeName.MEXC)
@@ -40,7 +46,7 @@ public class MexcSpotActivityService {
 
         // 1. Get real-time balances from API
         MexcAccountResponse accountInfo = mexcApiService.getAccountInfo(apiKey, secretKey);
-        List<MexcAssetBalanceResponse> balances = mapNonZeroBalances(accountInfo);
+        List<MexcAssetBalanceResponse> balances = valuateAndSortBalances(mapNonZeroBalances(accountInfo));
 
         // 2. Fetch processed trades from local database
         Portfolio portfolio = portfolioService.getByNameForUser(ExchangeName.MEXC.name(), user)
@@ -79,6 +85,8 @@ public class MexcSpotActivityService {
                 .sellTradeCount((int) trades.stream().filter(trade -> "SELL".equals(trade.getSide())).count())
                 .grossBuyQuoteQty(grossBuyQuoteQty)
                 .grossSellQuoteQty(grossSellQuoteQty)
+                .totalValueUsdt(balances.stream().map(MexcAssetBalanceResponse::getValueUsdt).reduce(BigDecimal.ZERO, BigDecimal::add))
+                .totalValueBtc(balances.stream().map(MexcAssetBalanceResponse::getValueBtc).reduce(BigDecimal.ZERO, BigDecimal::add))
                 .fetchedAt(System.currentTimeMillis())
                 .lastSyncTimestamp(config.getLastSyncTimestamp())
                 .build();
@@ -103,7 +111,41 @@ public class MexcSpotActivityService {
                         .locked(balance.getLocked())
                         .total(balance.getFree().add(balance.getLocked()))
                         .build())
-                .sorted(Comparator.comparing(MexcAssetBalanceResponse::getTotal, Comparator.reverseOrder()))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Attaches valueUsdt/valueBtc to every balance (one batch pricing call covering every held
+     * asset plus BTC/USDT) and sorts by valueUsdt descending — see the identical rationale in
+     * BinanceSpotActivityService.valuateAndSortBalances.
+     */
+    private List<MexcAssetBalanceResponse> valuateAndSortBalances(List<MexcAssetBalanceResponse> balances) {
+        if (balances.isEmpty()) {
+            return balances;
+        }
+
+        List<String> symbols = new ArrayList<>(balances.stream()
+                .map(MexcAssetBalanceResponse::getAsset)
+                .collect(Collectors.toSet()));
+        if (!symbols.contains(OperationUtils.BTC)) {
+            symbols.add(OperationUtils.BTC);
+        }
+        if (!symbols.contains(OperationUtils.USDT)) {
+            symbols.add(OperationUtils.USDT);
+        }
+        Map<String, Map<String, Double>> prices = pricingFacade.getPrices(symbols);
+
+        return balances.stream()
+                .peek(balance -> {
+                    Map<String, Double> assetPrices = prices.getOrDefault(balance.getAsset(), Map.of());
+                    BigDecimal usdtPrice = Optional.ofNullable(assetPrices.get(OperationUtils.USDT))
+                            .map(BigDecimal::valueOf).orElse(BigDecimal.ZERO);
+                    BigDecimal btcPrice = Optional.ofNullable(assetPrices.get(OperationUtils.BTC))
+                            .map(BigDecimal::valueOf).orElse(BigDecimal.ZERO);
+                    balance.setValueUsdt(balance.getTotal().multiply(usdtPrice));
+                    balance.setValueBtc(balance.getTotal().multiply(btcPrice));
+                })
+                .sorted(Comparator.comparing(MexcAssetBalanceResponse::getValueUsdt, Comparator.reverseOrder()))
                 .collect(Collectors.toList());
     }
 
