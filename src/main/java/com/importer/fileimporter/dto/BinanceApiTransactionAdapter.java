@@ -72,4 +72,8 @@ public class BinanceApiTransactionAdapter extends TransactionCoinName {
     public String getPaidWith() {
         return quoteAsset;
     }
+
+    public Long getTradeId() {
+        return trade.getId();
+    }
 }

@@ -19,16 +19,28 @@ class BinanceSpotActivityServiceSpec extends Specification {
     def encryptionService = Mock(EncryptionService)
     def transactionService = Mock(TransactionService)
     def portfolioService = Mock(PortfolioService)
+    def pricingFacade = Mock(com.importer.fileimporter.facade.PricingFacade)
 
     def service = new BinanceSpotActivityService(
             binanceApiService,
             userExchangeConfigRepository,
             encryptionService,
             transactionService,
-            portfolioService
+            portfolioService,
+            pricingFacade
     )
 
     def user = Mock(User)
+
+    def setup() {
+        // FET priced low, USDT/BTC priced so USDT ($100 held) still outvalues FET ($6.25 held) —
+        // keeps the pre-existing ordering assertions below meaningful under value-based sorting.
+        pricingFacade.getPrices(_) >> [
+                FET : [USDT: 0.5d, BTC: 0.00001d],
+                USDT: [USDT: 1.0d, BTC: 0.0000153d],
+                BTC : [USDT: 65000.0d, BTC: 1.0d],
+        ]
+    }
 
     private UserExchangeConfig configWith(Long lastSyncTimestamp = 123456L) {
         Mock(UserExchangeConfig) {
@@ -107,5 +119,69 @@ class BinanceSpotActivityServiceSpec extends Specification {
         response.summary.lastSyncTimestamp == 123456L
         response.trades[0].tradeId == 2L
         response.trades[0].side == 'SELL'
+    }
+
+    def "excludes DEPOSIT/WITHDRAW rows so an off-chain-transfer deposit's non-numeric externalId never reaches the trade mapper"() {
+        given:
+        userExchangeConfigRepository.findByUserAndExchangeName(user, ExchangeName.BINANCE) >> Optional.of(configWith())
+        encryptionService.decrypt('encrypted-secret') >> 'plain-secret'
+        binanceApiService.getAccountInfo('api-key', 'plain-secret') >> Stub(BinanceAccountResponse) {
+            getBalances() >> []
+        }
+
+        def portfolio = Mock(Portfolio)
+        portfolioService.getByNameForUser(ExchangeName.BINANCE.name(), user) >> Optional.of(portfolio)
+
+        def deposit = Transaction.builder()
+                .side('DEPOSIT')
+                .symbol('BTC')
+                .externalId('Off-chain transfer 60285041508')
+                .executed(new BigDecimal('0.1'))
+                .dateUtc(LocalDateTime.of(2023, 11, 14, 22, 0, 0))
+                .exchangeName(ExchangeName.BINANCE)
+                .build()
+        def buyTx = Transaction.builder()
+                .side('BUY')
+                .pair('FETUSDT')
+                .symbol('FET')
+                .paidWith('USDT')
+                .externalId('1')
+                .executed(new BigDecimal('10'))
+                .paidAmount(new BigDecimal('25'))
+                .price(new BigDecimal('2.5'))
+                .dateUtc(LocalDateTime.of(2023, 11, 14, 22, 13, 20))
+                .exchangeName(ExchangeName.BINANCE)
+                .build()
+        transactionService.findByPortfolio(portfolio) >> [deposit, buyTx]
+
+        when:
+        def response = service.getSpotActivity(user)
+
+        then:
+        noExceptionThrown()
+        response.trades.size() == 1
+        response.trades[0].side == 'BUY'
+    }
+
+    def "sorts balances by USDT value, not raw quantity — a small-quantity/high-value asset outranks large-quantity/low-value dust"() {
+        given: "144,200 RSR (dust) vs 0.01 BTC — BTC is worth far more despite the tiny quantity"
+        userExchangeConfigRepository.findByUserAndExchangeName(user, ExchangeName.BINANCE) >> Optional.of(configWith())
+        encryptionService.decrypt('encrypted-secret') >> 'plain-secret'
+        binanceApiService.getAccountInfo('api-key', 'plain-secret') >> Stub(BinanceAccountResponse) {
+            getBalances() >> [balance('RSR', '144200'), balance('BTC', '0.01')]
+        }
+        portfolioService.getByNameForUser(ExchangeName.BINANCE.name(), user) >> Optional.empty()
+        pricingFacade.getPrices(_) >> [
+                RSR: [USDT: 0.001d, BTC: 0.0000000001d],
+                BTC: [USDT: 65000.0d, BTC: 1.0d],
+        ]
+
+        when:
+        def response = service.getSpotActivity(user)
+
+        then: "BTC (0.01 * 65000 = 650 USDT) outranks RSR (144200 * 0.001 = 144.2 USDT) despite the far smaller raw quantity"
+        response.balances*.asset == ['BTC', 'RSR']
+        response.balances[0].valueUsdt == new BigDecimal('650')
+        response.summary.totalValueUsdt == response.balances[0].valueUsdt + response.balances[1].valueUsdt
     }
 }

@@ -12,4 +12,6 @@ public class MexcAssetBalanceResponse {
     private BigDecimal free;
     private BigDecimal locked;
     private BigDecimal total;
+    private BigDecimal valueUsdt;
+    private BigDecimal valueBtc;
 }
