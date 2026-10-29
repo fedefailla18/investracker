@@ -42,8 +42,8 @@ class CoinInformationFacadeSpec extends Specification {
             amount == BigDecimal.ZERO
             totalAmountBought == BigDecimal.ZERO
             totalAmountSold == BigDecimal.ZERO
-            realizedProfit == BigDecimal.ZERO
-            unrealizedProfit == BigDecimal.ZERO
+            totalRealizedProfitUsdt == BigDecimal.ZERO
+            unrealizedProfitUsdt == BigDecimal.ZERO
             currentPositionInUsdt == BigDecimal.ZERO
             avgEntryPrice.isEmpty()
         }
@@ -107,9 +107,8 @@ class CoinInformationFacadeSpec extends Specification {
             totalAmountSold == 120
             currentPrice == 2
             currentPositionInUsdt == (currentPrice * amount)
-            realizedProfit == 110.5
-            unrealizedProfit == 160
-            unrealizedTotalProfitMinusTotalCost == 80
+            totalRealizedProfitUsdt == 110.5
+            unrealizedProfitUsdt == 80
         }
     }
 
@@ -131,8 +130,7 @@ class CoinInformationFacadeSpec extends Specification {
         then:
         with(response) {
             amount == 1
-            realizedProfit == BigDecimal.ZERO
-            unrealizedProfit == 500
+            totalRealizedProfitUsdt == BigDecimal.ZERO
             currentPositionInUsdt == 500
         }
     }
@@ -161,8 +159,7 @@ class CoinInformationFacadeSpec extends Specification {
         then:
         with(response) {
             amount == BigDecimal.ZERO
-            realizedProfit == -300
-            unrealizedProfit == BigDecimal.ZERO
+            totalRealizedProfitUsdt == -300
             currentPositionInUsdt == BigDecimal.ZERO
         }
     }

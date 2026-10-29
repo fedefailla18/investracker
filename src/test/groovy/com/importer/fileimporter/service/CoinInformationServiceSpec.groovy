@@ -76,7 +76,7 @@ class CoinInformationServiceSpec extends Specification {
 
         then:
         result.amount == 0
-        result.getRealizedProfit() == 100
+        result.getTotalRealizedProfitUsdt() == 100
     }
 
     def "should correctly update holding fields including amountInUsdt"() {

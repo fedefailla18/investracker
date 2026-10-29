@@ -50,10 +50,8 @@ public class CoinInformationResponse {
     private Map<String, BigDecimal> spent;
     private Map<String, BigDecimal> sold;
 
-    private BigDecimal realizedProfit; // Realized profit from sold transactions
     private BigDecimal totalRealizedProfitUsdt; // Realized profit from sold transactions
-    private BigDecimal unrealizedProfit; // Potential profit from current holdings
-    private BigDecimal unrealizedTotalProfitMinusTotalCost;
+    private BigDecimal unrealizedProfitUsdt; // currentPositionInUsdt - stableTotalCost (paper P&L on the open position)
 
     private int totalTransactions;
     private List<TransactionData> rows;
@@ -71,9 +69,8 @@ public class CoinInformationResponse {
                 .totalAmountBought(ZERO)
                 .totalAmountSold(ZERO)
                 .currentPositionInUsdt(ZERO)
-                .realizedProfit(ZERO)
                 .totalRealizedProfitUsdt(ZERO)
-                .unrealizedProfit(ZERO)
+                .unrealizedProfitUsdt(ZERO)
                 .totalExecuted(ZERO)
                 .build();
     }

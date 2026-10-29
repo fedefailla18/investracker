@@ -82,12 +82,7 @@ public class CoinInformationService {
 
         response.setCurrentPrice(currentMarketPrice);
         response.setCurrentPositionInUsdt(currentMarketValue);
-
-        // This logic seems off, but I'll keep it for now to match original intent
-        response.setUnrealizedProfit(currentMarketValue);
-        response.setUnrealizedTotalProfitMinusTotalCost(currentMarketValue.subtract(inventoryState.inventoryCostUsdt));
-        response.setRealizedProfit(inventoryState.realizedProfitUsdt);
-
+        response.setUnrealizedProfitUsdt(currentMarketValue.subtract(inventoryState.inventoryCostUsdt));
 
         setAndSaveHolding(symbol, response, portfolio);
 
@@ -153,8 +148,8 @@ public class CoinInformationService {
             BigDecimal currentValueInUsdt = response.getAmount().multiply(response.getCurrentPrice());
             holding.setAmountInUsdt(OperationUtils.sumBigDecimal(holding.getAmountInUsdt(), currentValueInUsdt));
         } else {
-            // Fallback to unrealizedProfit if amount or currentPrice is null
-            holding.setAmountInUsdt(OperationUtils.sumBigDecimal(holding.getAmountInUsdt(), response.getUnrealizedProfit()));
+            // Fallback to the already-computed current market value if amount or currentPrice is null
+            holding.setAmountInUsdt(OperationUtils.sumBigDecimal(holding.getAmountInUsdt(), response.getCurrentPositionInUsdt()));
         }
     }
 

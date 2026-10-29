@@ -80,8 +80,26 @@ public class PortfolioDistributionFacade {
     }
 
     public HoldingDto getHolding(String portfolioName, String symbol) {
-        return holdingService.getBySymbolAndPortfolioName(portfolioName, symbol)
-                .map(HoldingConverter.Mapper::createFrom).get();
+        Holding holding = holdingService.getBySymbolAndPortfolioName(portfolioName, symbol)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Holding not found."));
+        HoldingDto dto = HoldingConverter.Mapper.createFrom(holding);
+        applyLiveValuation(dto, holding);
+        return dto;
+    }
+
+    /**
+     * currentPositionInUsdt/unrealizedProfitUsdt are always live-computed here (amount × current
+     * price), never read off the persisted Holding — the entity's own currentPositionInUsdt drifts
+     * over repeated recomputes (see CoinInformationService), and "current market value" has to use
+     * *today's* price regardless of when the Holding row was last written anyway.
+     */
+    private void applyLiveValuation(HoldingDto dto, Holding holding) {
+        Map<String, Double> price = pricingFacade.getPrices(holding.getSymbol());
+        BigDecimal usdtPrice = Optional.ofNullable(price.get(USDT)).map(BigDecimal::valueOf).orElse(BigDecimal.ZERO);
+        BigDecimal currentValueUsdt = usdtPrice.multiply(Optional.ofNullable(holding.getAmount()).orElse(BigDecimal.ZERO));
+        BigDecimal costBasis = Optional.ofNullable(holding.getInventoryCostUsdt()).orElse(BigDecimal.ZERO);
+        dto.setCurrentPositionInUsdt(currentValueUsdt);
+        dto.setUnrealizedProfitUsdt(currentValueUsdt.subtract(costBasis));
     }
 
     private Optional<Portfolio> getByName(String portfolioName) {
@@ -202,7 +220,8 @@ public class PortfolioDistributionFacade {
                             .totalAmountSold(e.getTotalAmountSold())
                             .totalRealizedProfitUsdt(e.getTotalRealizedProfitUsdt())
                             .inventoryCostUsdt(e.getInventoryCostUsdt())
-                            .currentPositionInUsdt(e.getCurrentPositionInUsdt())
+                            .currentPositionInUsdt(currentPositionInUsdt)
+                            .unrealizedProfitUsdt(unrealizedProfitUsdt)
                             .build());
                 }
         );
@@ -331,6 +350,7 @@ public class PortfolioDistributionFacade {
                                     .inventoryCostUsdt(addPreventingNull(e1.getInventoryCostUsdt(), e2.getInventoryCostUsdt()))
                                     .currentPositionInUsdt(addPreventingNull(e1.getCurrentPositionInUsdt(), e2.getCurrentPositionInUsdt()))
                                     .totalRealizedProfitUsdt(addPreventingNull(e1.getTotalRealizedProfitUsdt(), e2.getTotalRealizedProfitUsdt()))
+                                    .unrealizedProfitUsdt(addPreventingNull(e1.getUnrealizedProfitUsdt(), e2.getUnrealizedProfitUsdt()))
                                     .build();
                         }
                 ));
