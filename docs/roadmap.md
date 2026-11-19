@@ -22,7 +22,7 @@ Active technical debt, architectural priorities, and planned feature milestones.
 
 ### Infrastructure & Resilience
 
-- **Asynchronous Ingestion**: Decouple file upload from holding updates using background event queues.
+- **Asynchronous Ingestion**: Decouple holding recompute from every transaction-writing path (exchange sync, not just file upload) using a background task queue. Design confirmed 2026-10-29/30, not yet implemented — see [holding-recompute-queue.md](holding-recompute-queue.md).
 - **Fault Tolerance**: Resilience4j circuit breakers on external pricing calls (`CryptoCompareProxy`).
 - **Database Optimization**: Composite indexes on `(portfolio_id, symbol, date_utc)`.
 - **API Versioning**: Formal `/v1/` route prefixes for public contracts.
